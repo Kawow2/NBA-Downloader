@@ -121,6 +121,24 @@ def choose_game(site):
             print_status("Numéro invalide.", "error")
 
 
+def choose_section(servers):
+    """A page can hold several games (e.g. "USA vs France - FINAL" and
+    "Spain vs Germany - 3rd Place"): pick one first."""
+    sections = list(dict.fromkeys(s.section for s in servers if s.section))
+    if len(sections) < 2:
+        return None, servers
+    print_separator(title="MATCHS SUR CETTE PAGE")
+    for i, sec in enumerate(sections, 1):
+        print(f"  {Colors.BOLD}{i:>2}.{Colors.ENDC} {sec}")
+    print_separator()
+    while True:
+        pick = ask(f"Choisir le match (1-{len(sections)}, Entrée = 1) : ") or "1"
+        if pick.isdigit() and 1 <= int(pick) <= len(sections):
+            chosen = sections[int(pick) - 1]
+            return chosen, [s for s in servers if s.section == chosen]
+        print_status("Numéro invalide.", "error")
+
+
 def choose_server(servers):
     print_separator(title="SERVEURS")
     for i, s in enumerate(servers, 1):
@@ -201,11 +219,12 @@ def process_game(site, url, cli_dest):
         print_status("Relancez avec --debug et envoyez le contenu du dossier ./debug pour adapter le parseur.", "info")
         return
 
+    section, servers = choose_section(servers)
     server = choose_server(servers)
     picked = choose_parts(server)
     dest = choose_dest(cli_dest)
 
-    folder, stem = plex_target(game, dest)
+    folder, stem = plex_target(game, dest, title=section)
     single = len(server.parts) == 1
     merge = False
     if len(picked) > 1:

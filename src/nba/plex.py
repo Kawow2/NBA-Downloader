@@ -48,9 +48,10 @@ def sanitize_filename(name):
     return name[:180]
 
 
-def plex_target(game, dest_root):
-    """Returns (folder, file stem without extension)."""
-    title = clean_game_title(game.title)
+def plex_target(game, dest_root, title=None):
+    """Returns (folder, file stem without extension). title overrides the
+    page title (a page with several games: the chosen game's heading)."""
+    title = clean_game_title(title or game.title)
     prefix = league(game.title)
     if game.date:
         folder = os.path.join(dest_root, f"Season {game.date.year}")

@@ -14,7 +14,7 @@ from datetime import date
 from urllib.parse import urljoin, urlparse, parse_qsl, quote_plus
 
 import requests
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
 from src.var import Colors, DEFAULT_USER_AGENT, SourceDomains, print_status
 from src.utils.config.config import get_setting, set_setting
@@ -196,9 +196,10 @@ class Part:
 
 
 class Server:
-    def __init__(self, name, host):
+    def __init__(self, name, host, section=None):
         self.name = name
         self.host = host
+        self.section = section  # the game, when a page holds several games
         self.parts = []
 
     def __repr__(self):
@@ -242,7 +243,8 @@ def _server_label(label):
         return None
     m = _SERVER_RE.search(label)
     if m:
-        return f"{m.group(1).capitalize()} {m.group(2).upper()}{(m.group(3) or '').rstrip()}"
+        paren = re.sub(r"\s+", " ", m.group(3) or "").rstrip()
+        return f"{m.group(1).capitalize()} {m.group(2).upper()}{paren}"
     return None
 
 
@@ -290,6 +292,7 @@ class Site:
 
     def get(self, url, method="GET", data=None, allow_error=False, referer=None):
         headers = {"Referer": referer} if referer else None
+        self.last_status = None
         for attempt in range(2):
             try:
                 if method == "POST":
@@ -297,15 +300,18 @@ class Site:
                 else:
                     resp = self.session.get(url, timeout=20, headers=headers)
             except requests.RequestException as e:
+                self.last_status = f"erreur réseau : {str(e)[:120]}"
                 if allow_error:
                     return None
                 print_status(f"Connexion impossible à {url} : {e}", "error")
                 return None
+            self.last_status = resp.status_code
             if self._is_cloudflare_challenge(resp) and attempt == 0 and not self._cf_prompted and self._is_own_host(url):
                 self._cf_prompted = True
                 self._ask_cloudflare_cookie()
                 continue
             if resp.status_code >= 400:
+                self._dump(url, resp.text, suffix=f"_HTTP{resp.status_code}")
                 if not allow_error:
                     print_status(f"{url} a répondu {resp.status_code}", "error")
                 return None
@@ -313,12 +319,12 @@ class Site:
             return resp.text
         return None
 
-    def _dump(self, url, html):
+    def _dump(self, url, html, suffix=""):
         if not self.debug:
             return
         os.makedirs("debug", exist_ok=True)
         name = re.sub(r"[^a-zA-Z0-9]+", "_", urlparse(url).path + "_" + urlparse(url).query).strip("_") or "index"
-        path = os.path.join("debug", name[:120] + ".html")
+        path = os.path.join("debug", name[:120] + suffix + ".html")
         with open(path, "w", encoding="utf-8") as f:
             f.write(html)
         print_status(f"[debug] page enregistrée : {path}", "info")
@@ -479,14 +485,17 @@ class Site:
                 continue
             # "Watch" button to an intermediate page: the players are there.
             found = self._resolve_gateway(c["url"], url)
-            if self.debug:
+            if self.debug and found is not None:
                 print_status(f"[debug] page intermédiaire {c['url']} : {len(found)} lecteur(s)", "info")
-            if not found:
+            if found is None:
+                found = []
+            elif not found:
                 print_status(f"Aucun lecteur trouvé sur la page intermédiaire {c['url'][:70]}"
                              + ("" if self.debug else " (relancez avec --debug pour l'enregistrer)"), "warning")
             for sub in found:
                 sub["label"] = " / ".join(p for p in (c["label"], sub["label"]) if p)
                 sub["referer"] = c["url"]
+                sub["section"] = c.get("section")
                 candidates.append(sub)
             if not found:
                 candidates.append(c)  # yt-dlp will still try the page itself
@@ -499,9 +508,28 @@ class Site:
 
     def _resolve_gateway(self, url, referer):
         html = self.get(url, allow_error=True, referer=referer)
+        if not html and self.last_status in (403, 429, 503):
+            html = self._get_with_cloudscraper(url, referer)
         if not html:
-            return []
+            print_status(f"Page intermédiaire inaccessible ({self.last_status}) : {url[:70]}", "warning")
+            return None
         return self._collect_embeds(BeautifulSoup(html, "html.parser"), url, depth=1, gateway=True)
+
+    def _get_with_cloudscraper(self, url, referer):
+        """Retry a page refused by an anti-bot (Cloudflare) check."""
+        try:
+            import cloudscraper
+        except ImportError:
+            return None
+        try:
+            scraper = cloudscraper.create_scraper()
+            resp = scraper.get(url, headers={"Referer": referer}, timeout=30)
+        except Exception as e:
+            self.last_status = f"cloudscraper : {str(e)[:120]}"
+            return None
+        self.last_status = resp.status_code
+        self._dump(url, resp.text, suffix="" if resp.status_code < 400 else f"_HTTP{resp.status_code}_cloudscraper")
+        return resp.text if resp.status_code < 400 else None
 
     def _decode_wrapped_url(self, url):
         """Unwrap same-site redirectors ('/go?url=<base64>', '?link=https...')."""
@@ -584,8 +612,31 @@ class Site:
         tab_labels = self._tab_labels(soup)
         candidates = []
         seen = set()
-        context_label = None
+        # Headings seen so far above the current element: the game
+        # ("USA vs France - FINAL", when a page holds several games), the
+        # server ("Server #1 (DM)") and the part ("Part 2"). Button texts
+        # don't count, or "Part 1" would leak onto the next button.
+        ctx = {"section": None, "server": None, "part": None}
         follow = []
+
+        def in_button(node):
+            for i, parent in enumerate(node.parents):
+                if i > 5 or parent is None:
+                    break
+                if parent.name in ("a", "button", "option"):
+                    return True
+            return False
+
+        def is_heading(node):
+            for i, parent in enumerate(node.parents):
+                if i > 4 or parent is None:
+                    break
+                if parent.name in ("b", "strong", "h1", "h2", "h3", "h4", "h5"):
+                    return True
+            return False
+
+        def ctx_label():
+            return " / ".join(p for p in (ctx["server"], ctx["part"]) if p) or None
 
         def pane_label(el):
             for parent in [el] + list(el.parents):
@@ -629,22 +680,31 @@ class Site:
             pane = pane_label(el)
             parts = [p for p in (pane, label) if p]
             joined = " ".join(parts)
-            # The last "Part N" / "Server N" text seen above the player fills
-            # in whatever the element itself doesn't say (e.g. a "Part 2"
-            # heading followed by one button per host).
-            if context_label and context_label not in parts:
-                if (_part_number(context_label) is not None and _part_number(joined) is None) or \
-                   (_server_label(context_label) and not _server_label(joined)) or not parts:
-                    parts.append(context_label)
-            cand = {"url": url, "label": " / ".join(dict.fromkeys(parts)), "host": host_display_name(url)}
+            # The headings above the player fill in whatever the element
+            # itself doesn't say (e.g. a "Part 2" heading followed by one
+            # button per host, or "Server #1" followed by "Part N" buttons).
+            if ctx["server"] and not _server_label(joined):
+                parts.append(ctx["server"])
+            if ctx["part"] and _part_number(joined) is None:
+                parts.append(ctx["part"])
+            cand = {"url": url, "label": " / ".join(dict.fromkeys(parts)), "host": host_display_name(url),
+                    "section": ctx["section"]}
             by_key[key] = cand
             candidates.append(cand)
 
         for node in soup.descendants:
             if isinstance(node, NavigableString):
-                text = str(node).strip()
-                if text and len(text) <= 80 and _LABEL_HINT.search(text) and node.parent and node.parent.name not in ("script", "style", "title"):
-                    context_label = text
+                text = re.sub(r"\s+", " ", str(node)).strip()
+                if not text or len(text) > 100 or not node.parent or node.parent.name in ("script", "style", "title") \
+                        or isinstance(node, Comment) or in_button(node):
+                    continue
+                if _server_label(text):
+                    ctx["server"], ctx["part"] = text, None
+                elif _part_number(text) is not None and _LABEL_HINT.search(text):
+                    ctx["part"] = text
+                elif depth == 0 and not gateway and re.search(r"\bvs\.?\s", text, re.IGNORECASE) \
+                        and is_heading(node) and not _in_chrome(node, strict=False):
+                    ctx.update(section=text, server=None, part=None)
                 continue
             if not isinstance(node, Tag) or node.name in ("script", "style", "head", "meta", "link"):
                 if isinstance(node, Tag) and node.name == "script" and node.string and (depth == 0 or gateway):
@@ -684,23 +744,23 @@ class Site:
                     # follow it once and collect what it embeds.
                     is_part_link = node.name == "a" and _PART_RE.search(node.get_text(" ", strip=True) or "")
                     if depth == 0 and (node.name == "iframe" or is_part_link) and url.split("#")[0].rstrip("/") != page_url.rstrip("/"):
-                        follow.append((url, own_label(node) or pane_label(node) or context_label))
+                        follow.append((url, own_label(node) or pane_label(node) or ctx_label(), ctx["section"]))
                     continue
                 if node.name in ("iframe", "video", "source", "embed"):
                     if not _is_blocked(url) or "drive.google" in url:
                         add(url, node)
-                elif self._looks_like_video_host(url) or (
-                        node.name in ("a", "button", "li", "option", "span", "div")
-                        and _PART_RE.search(node.get_text(" ", strip=True) or "")
-                        and not _is_blocked(url)):
+                elif self._looks_like_video_host(url):
                     add(url, node)
-                elif depth == 0 and node.name == "a" and not _is_blocked(url) \
-                        and _WATCH_TEXT.search(node.get_text(" ", strip=True) or ""):
+                elif depth == 0 and not _is_blocked(url) and node.name in ("a", "button", "li", "option", "span", "div") \
+                        and (_PART_RE.search(node.get_text(" ", strip=True) or "")
+                             or node.name == "a" and _WATCH_TEXT.search(node.get_text(" ", strip=True) or "")):
+                    # "Watch" / "Part 1" button to a page on another site
+                    # that holds the actual player.
                     add(url, node)
                     if url.rstrip("/") in by_key:
                         by_key[url.rstrip("/")]["gateway"] = True
 
-        for url, label in follow:
+        for url, label, section in follow:
             html = self.get(url, allow_error=True)
             if not html:
                 continue
@@ -711,6 +771,7 @@ class Site:
                 seen.add(c["url"].rstrip("/"))
                 if label and label not in c["label"]:
                     c["label"] = " / ".join(p for p in (label, c["label"]) if p)
+                c["section"] = section
                 candidates.append(c)
         return candidates
 
@@ -719,9 +780,10 @@ class Site:
         servers = {}
         for c in candidates:
             name = _server_label(c["label"]) or c["host"]
-            if name not in servers:
-                servers[name] = Server(name, c["host"])
-            srv = servers[name]
+            key = (c.get("section"), name)
+            if key not in servers:
+                servers[key] = Server(name, c["host"], c.get("section"))
+            srv = servers[key]
             if c["host"] not in srv.host.split(" / "):
                 srv.host = f"{srv.host} / {c['host']}"
             number = _part_number(c["label"])
