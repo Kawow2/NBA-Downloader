@@ -342,4 +342,11 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print(f"\n{Colors.WARNING}Interrompu.{Colors.ENDC}")
+        print(f"\n{Colors.WARNING}Interrompu. Relancez le même match pour reprendre le téléchargement "
+              f"là où il s'est arrêté.{Colors.ENDC}", flush=True)
+        # yt-dlp downloads fragments in worker threads that a normal exit
+        # waits for ("Waiting for all threads to shutdown..." while the
+        # download keeps going): leave immediately instead. The partial
+        # .part/.ytdl files are kept so the next run resumes.
+        sys.stderr.flush()
+        os._exit(130)
