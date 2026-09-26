@@ -7,16 +7,19 @@ Two backends:
   * yt-dlp for everything else (OK.ru, Dailymotion, Streamtape, Mixdrop,
     Dood, VK, generic <video>/jwplayer pages...).
 Hosts the extractors know go through them first, every other host through
-yt-dlp first; whichever fails falls back to the other.
+yt-dlp first; whichever fails falls back to the other. OK.ru and
+Dailymotion fall back to the built-in extractors in hosts.py instead.
 """
 import os
 import shutil
+import socket
 import subprocess
 from urllib.parse import urlparse
 
 from src.var import Colors, DEFAULT_USER_AGENT, print_status
 from src.utils.check.check_ffmpeg_installed import check_ffmpeg_installed
 from src.utils.download.verify_video_file import verify_video_file
+from src.nba.hosts import builtin_stream, has_builtin, patch_ytdlp
 
 EXTRACTOR_HOSTS = (
     "vidzy", "luluvdo", "lulustream", "filemoon", "bysesukior", "voe", "vidmoly", "sendvid",
@@ -70,9 +73,24 @@ def ffmpeg_copy(stream_url, out_path, referer=None, user_agent=DEFAULT_USER_AGEN
         return False
     if result.returncode != 0 or not os.path.exists(tmp):
         print_status("ffmpeg a échoué sur ce flux.", "error")
+        _explain_dns_failure(stream_url)
         _cleanup(tmp)
         return False
     return _finish(tmp, out_path)
+
+
+def _explain_dns_failure(url):
+    """Video CDNs use throwaway domain names that some DNS servers (ISP
+    DNS, NextDNS/AdGuard/Pi-hole filters, antivirus web shields) don't
+    resolve or block: say so instead of a bare ffmpeg I/O error."""
+    host = urlparse(url).hostname
+    if not host:
+        return
+    try:
+        socket.getaddrinfo(host, 443)
+    except socket.gaierror:
+        print_status(f"Votre DNS ne résout pas {host} (serveur vidéo) : le blocage vient de votre réseau, "
+                     "pas du site. Essayez un autre DNS (ex. 1.1.1.1 ou 8.8.8.8) ou un autre serveur.", "warning")
 
 
 def ffmpeg_remux(src, out_path):
@@ -171,6 +189,7 @@ def _download_with_ytdlp(embed_url, out_path, page_url):
         print_status("yt-dlp n'est pas installé (pip install -U yt-dlp).", "warning")
         return False
 
+    patch_ytdlp()
     has_ffmpeg = check_ffmpeg_installed()
     base = os.path.splitext(out_path)[0] + ".ytdlp"
     opts = {
@@ -227,6 +246,17 @@ def _download_with_ytdlp(embed_url, out_path, page_url):
     return True
 
 
+def _download_builtin(embed_url, out_path, page_url):
+    found = builtin_stream(embed_url, page_url)
+    if not found:
+        return False
+    stream, referer = found
+    if not check_ffmpeg_installed():
+        print_status("ffmpeg est nécessaire pour ce flux (winget install Gyan.FFmpeg).", "error")
+        return False
+    return ffmpeg_copy(stream, out_path, referer=referer)
+
+
 def download_part(embed_url, out_path, page_url=None):
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     host = (urlparse(embed_url).hostname or "").lower()
@@ -235,6 +265,10 @@ def download_part(embed_url, out_path, page_url=None):
                ("yt-dlp", lambda: _download_with_ytdlp(embed_url, out_path, page_url))]
     if not any(h in host for h in EXTRACTOR_HOSTS):
         methods.reverse()
+    if has_builtin(embed_url):
+        # OK.ru / Dailymotion: yt-dlp, then the built-in extractor (the
+        # project's extractors don't know these hosts).
+        methods = [methods[0], ("extracteur intégré", lambda: _download_builtin(embed_url, out_path, page_url))]
     if path.endswith((".m3u8", ".mp4")) and check_ffmpeg_installed():
         # A raw stream/file link: nothing to extract.
         methods.insert(0, ("ffmpeg", lambda: ffmpeg_copy(embed_url, out_path, referer=page_url)))
