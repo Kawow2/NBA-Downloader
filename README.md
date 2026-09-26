@@ -56,6 +56,8 @@ Créez une bibliothèque Plex de type **Séries TV** dont le dossier contient le
 | `--dest <chemin>` | dossier de destination sans poser la question |
 | `--set-default-dir <chemin>` | enregistrer le chemin par défaut |
 | `--site <URL>` | si le site change de domaine (mémorisé) |
+| `--quality 720\|1080\|1440\|2160\|best` | qualité max (défaut 1080p, mémorisée) ; `best` ≈ 20 Go par match chez OK.ru |
+| `--threads <N>` | morceaux téléchargés en parallèle (défaut 16, mémorisé) ; à augmenter sur une connexion rapide |
 | `--debug` | enregistre les pages dans `./debug` et affiche les lecteurs détectés |
 
 Si aucun lecteur n'est détecté sur une page (changement de mise en page du site), relancez avec `--debug` : les pages HTML sauvegardées dans `./debug` permettent d'adapter `src/nba/site.py`.

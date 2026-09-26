@@ -49,9 +49,10 @@ def _session():
 
 # ------------------------------------------------------------------ OK.ru
 _OK_QUALITY_ORDER = ("ultra", "quad", "full", "hd", "sd", "low", "lowest", "mobile")
+_OK_QUALITY_HEIGHT = {"ultra": 2160, "quad": 1440, "full": 1080, "hd": 720, "sd": 480, "low": 360, "lowest": 240, "mobile": 144}
 
 
-def okru_stream(url, referer=None):
+def okru_stream(url, referer=None, max_height=None):
     m = re.search(r"ok\.ru/(?:videoembed|video|live)/(\d+)", url)
     if not m:
         return None
@@ -80,10 +81,16 @@ def okru_stream(url, referer=None):
         print_status(f"OK.ru : métadonnées illisibles ({e})", "error")
         return None
     metadata = metadata or {}
+    videos = {v.get("name"): v.get("url") for v in metadata.get("videos") or [] if v.get("url")}
+    if max_height:
+        # Direct file in the best quality under the cap (the HLS master
+        # would make ffmpeg pick the top quality).
+        for q in _OK_QUALITY_ORDER:
+            if videos.get(q) and _OK_QUALITY_HEIGHT.get(q, 0) <= max_height:
+                return videos[q], "https://ok.ru/"
     for key in ("hlsManifestUrl", "ondemandHls", "hlsMasterPlaylistUrl"):
         if metadata.get(key):
             return metadata[key], "https://ok.ru/"
-    videos = {v.get("name"): v.get("url") for v in metadata.get("videos") or [] if v.get("url")}
     for q in _OK_QUALITY_ORDER:
         if videos.get(q):
             return videos[q], "https://ok.ru/"
@@ -132,10 +139,10 @@ def dailymotion_stream(url, referer=None):
     return None
 
 
-def builtin_stream(url, referer=None):
+def builtin_stream(url, referer=None, max_height=None):
     host = (urlparse(url).hostname or "").lower()
     if "ok.ru" in host or "odnoklassniki" in host:
-        return okru_stream(url, referer)
+        return okru_stream(url, referer, max_height)
     if "dailymotion" in host or host == "dai.ly":
         return dailymotion_stream(url, referer)
     return None

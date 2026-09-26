@@ -44,7 +44,7 @@ from src.utils.config.config import get_setting, set_setting
 from src.utils.check.check_ffmpeg_installed import check_ffmpeg_installed
 from src.nba.site import Site
 from src.nba.plex import plex_target
-from src.nba.downloader import download_part, merge_parts, ffmpeg_hint
+from src.nba.downloader import download_part, merge_parts, ffmpeg_hint, configure, SETTINGS
 
 FALLBACK_DEFAULT_DIR = os.path.join(os.path.expanduser("~"), "Videos", "NBA")
 
@@ -291,6 +291,10 @@ def main():
     parser.add_argument("--default-dir", metavar="CHEMIN", help="Chemin proposé par défaut pour cette session (utilisé par NBA-Downloader.ps1)")
     parser.add_argument("--set-default-dir", metavar="CHEMIN", help="Définit le chemin par défaut puis quitte")
     parser.add_argument("--site", help="URL du site si le domaine change (mémorisée)")
+    parser.add_argument("--quality", choices=["480", "720", "1080", "1440", "2160", "best"],
+                        help="Qualité max (défaut 1080, mémorisée). 'best' = la plus haute, souvent ~20 Go par match")
+    parser.add_argument("--threads", type=int, metavar="N",
+                        help="Morceaux téléchargés en parallèle (défaut 16, mémorisé). Plus = plus rapide, jusqu'à la limite de votre connexion")
     parser.add_argument("--debug", action="store_true", help="Enregistre les pages HTML dans ./debug et affiche les lecteurs détectés")
     args = parser.parse_args()
 
@@ -303,9 +307,20 @@ def main():
     if args.site:
         set_setting("nba_site_url", args.site.rstrip("/"))
 
+    if args.quality:
+        set_setting("nba_quality", args.quality)
+    if args.threads:
+        set_setting("nba_threads", args.threads)
+    quality = str(get_setting("nba_quality") or "1080")
+    configure(max_height=None if quality == "best" else int(quality),
+              threads=get_setting("nba_threads") or 16)
+
     site = Site(debug=args.debug)
     banner(site)
     print(f"  {Colors.DIM}Chemin par défaut : {default_dir()}{Colors.ENDC}")
+    quality_label = f"{SETTINGS['max_height']}p max" if SETTINGS["max_height"] else "la meilleure"
+    print(f"  {Colors.DIM}Qualité : {quality_label} · {SETTINGS['threads']} téléchargements en parallèle "
+          f"(--quality / --threads pour changer){Colors.ENDC}")
     ffmpeg_hint()
     print()
 

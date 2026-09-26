@@ -21,6 +21,19 @@ from src.utils.check.check_ffmpeg_installed import check_ffmpeg_installed
 from src.utils.download.verify_video_file import verify_video_file
 from src.nba.hosts import builtin_stream, has_builtin, patch_ytdlp
 
+# Download settings, set by main.py (--quality / --threads, remembered).
+# OK.ru throttles each connection, so throughput comes from fetching many
+# HLS fragments at once; and a 1080p cap keeps a game at a few GB instead
+# of ~20 GB in the host's top (1440p/4K) quality.
+SETTINGS = {"max_height": 1080, "threads": 16}
+
+
+def configure(max_height=None, threads=None):
+    SETTINGS["max_height"] = max_height
+    if threads:
+        SETTINGS["threads"] = max(1, int(threads))
+
+
 EXTRACTOR_HOSTS = (
     "vidzy", "luluvdo", "lulustream", "filemoon", "bysesukior", "voe", "vidmoly", "sendvid",
     "embed4me", "video.sibnet.ru", "uqload", "oneupload", "ansembed", "dingtezuni", "mivalyo",
@@ -195,12 +208,14 @@ def _download_with_ytdlp(embed_url, out_path, page_url):
     opts = {
         "outtmpl": base + ".%(ext)s",
         "format": "bv*+ba/b" if has_ffmpeg else "b[ext=mp4]/b",
+        # Best quality up to the cap (largest resolution <= max_height).
+        "format_sort": [f"res:{SETTINGS['max_height']}"] if SETTINGS["max_height"] else [],
         "merge_output_format": "mp4",
         "http_headers": {"Referer": page_url or embed_url, "User-Agent": DEFAULT_USER_AGENT},
         "noplaylist": True,
         "retries": 10,
         "fragment_retries": 10,
-        "concurrent_fragment_downloads": 8,
+        "concurrent_fragment_downloads": SETTINGS["threads"],
         "overwrites": True,
         "quiet": True,
         "no_warnings": True,
@@ -247,7 +262,7 @@ def _download_with_ytdlp(embed_url, out_path, page_url):
 
 
 def _download_builtin(embed_url, out_path, page_url):
-    found = builtin_stream(embed_url, page_url)
+    found = builtin_stream(embed_url, page_url, SETTINGS["max_height"])
     if not found:
         return False
     stream, referer = found
