@@ -1,3 +1,70 @@
+# 🏀 NBA Replay Downloader (basketball-video.com → Plex)
+
+Télécharge les replays de matchs NBA de [basketball-video.com](https://basketball-video.com) en **.mp4**, rangés et nommés pour **Plex**.
+
+## Lancement (PowerShell + venv)
+
+Prérequis : Python 3.8+ (`winget install Python.Python.3.12`) et, fortement conseillé, ffmpeg (`winget install Gyan.FFmpeg`).
+
+```powershell
+cd C:\chemin\vers\NBA-Downloader
+.\start.ps1
+```
+
+`start.ps1` crée l'environnement virtuel `.venv` au premier lancement, y installe `requirements.txt`, puis lance `main.py` avec le Python du venv.
+Si Windows refuse d'exécuter le script : `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
+Équivalent manuel :
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python main.py
+```
+
+## Déroulement
+
+1. **Menu** : `1` = les 10 derniers matchs du site, `2` = recherche (ex. `knicks spurs`) puis les 10 derniers résultats. On peut aussi coller directement l'URL d'un match.
+2. **Match** : choisir le numéro dans la liste.
+3. **Serveur** : choisir le serveur (VOE, Filemoon, OK.ru, Streamtape...).
+4. **Parties** : taper les parties voulues, ex. `1-2-3` (= parties 1, 2 et 3), `2`, ou Entrée pour toutes.
+5. **Chemin** : Entrée = chemin par défaut, ou taper un autre chemin (le programme propose alors de le garder comme défaut).
+6. **Téléchargement** en .mp4 (sans ré-encodage). Si plusieurs parties sont choisies, elles peuvent être fusionnées en un seul fichier. Si une partie échoue sur un serveur, la même partie est retentée sur les autres serveurs.
+
+## Chemin par défaut
+
+Au choix :
+
+- dans `start.ps1`, ligne `$CheminParDefaut = "D:\Plex\Sports\NBA"` ;
+- ou `python main.py --set-default-dir "D:\Plex\Sports\NBA"` (mémorisé dans `src/utils/config/config.json`) ;
+- sinon : `%USERPROFILE%\Videos\NBA`.
+
+## Organisation pour Plex
+
+```
+<chemin par défaut>\Season 2026\NBA - 2026-06-13 - New York Knicks vs San Antonio Spurs - NBA Finals Game 5.mp4
+```
+
+Créez une bibliothèque Plex de type **Séries TV** dont le dossier contient le dossier `NBA` (le chemin par défaut). Plex reconnaît les épisodes datés (`AAAA-MM-JJ`). Les parties non fusionnées sont nommées `... - pt1.mp4`, `... - pt2.mp4`, que Plex regroupe.
+
+## Options
+
+| Option | Rôle |
+| --- | --- |
+| `--url <URL>` | télécharger directement ce match |
+| `--dest <chemin>` | dossier de destination sans poser la question |
+| `--set-default-dir <chemin>` | enregistrer le chemin par défaut |
+| `--site <URL>` | si le site change de domaine (mémorisé) |
+| `--debug` | enregistre les pages dans `./debug` et affiche les lecteurs détectés |
+
+Si aucun lecteur n'est détecté sur une page (changement de mise en page du site), relancez avec `--debug` : les pages HTML sauvegardées dans `./debug` permettent d'adapter `src/nba/site.py`.
+Si le site est derrière Cloudflare, le programme demande le cookie `cf_clearance` et le User-Agent du navigateur. Si un hébergeur ne marche plus, mettez yt-dlp à jour : `.\.venv\Scripts\python.exe -m pip install -U yt-dlp`.
+
+L'ancien téléchargeur d'animes (Anime-Sama / Nakanime) est toujours disponible via `python anime_main.py`.
+
+---
+
 <div align="center"> 
 
 # Anime Downloader
@@ -88,10 +155,10 @@ git clone https://github.com/SertraFurr/Anime-Downloader.git
 cd Anime-Downloader
 
 # 3. Run it.
-python3 main.py
+python3 anime_main.py
 
 # Or use the CLI arguments.
-python3 main.py --help
+python3 anime_main.py --help
 ```
 
 ---
@@ -119,17 +186,17 @@ You can use the script entirely from the command line without interactive prompt
 
 **1. Search and Download Interactively:**
 ```bash
-python main.py --search "roshidere"
+python anime_main.py --search "roshidere"
 ```
 
 **2. Download Specific Episodes from URL (Fast Mode):**
 ```bash
-python main.py --url "https://anime-sama.tv/catalogue/roshidere/saison1/vostfr/" --episodes "1,2" --fast --mp4
+python anime_main.py --url "https://anime-sama.tv/catalogue/roshidere/saison1/vostfr/" --episodes "1,2" --fast --mp4
 ```
 
 **3. Download ALL episodes from a specific player:**
 ```bash
-python main.py --search "one piece" --player "Sibnet" --episodes "all" --threads
+python anime_main.py --search "one piece" --player "Sibnet" --episodes "all" --threads
 ```
 
 ---
