@@ -481,6 +481,9 @@ class Site:
             found = self._resolve_gateway(c["url"], url)
             if self.debug:
                 print_status(f"[debug] page intermédiaire {c['url']} : {len(found)} lecteur(s)", "info")
+            if not found:
+                print_status(f"Aucun lecteur trouvé sur la page intermédiaire {c['url'][:70]}"
+                             + ("" if self.debug else " (relancez avec --debug pour l'enregistrer)"), "warning")
             for sub in found:
                 sub["label"] = " / ".join(p for p in (c["label"], sub["label"]) if p)
                 sub["referer"] = c["url"]
@@ -669,10 +672,11 @@ class Site:
                     continue
                 url_host = _strip_www((urlparse(url).hostname or "").lower())
                 if gateway:
-                    if url_host == page_host or _is_blocked(url):
+                    if _is_blocked(url):
                         continue
+                    # A same-domain iframe can be the player wrapper itself.
                     if node.name in ("iframe", "video", "source", "embed") or \
-                            any(k in url_host for k in _KNOWN_VIDEO_HOSTS) and self._looks_like_video_host(url):
+                            url_host != page_host and any(k in url_host for k in _KNOWN_VIDEO_HOSTS) and self._looks_like_video_host(url):
                         add(url, node)
                     continue
                 if self._is_own_host(url):

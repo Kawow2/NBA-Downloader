@@ -14,13 +14,29 @@ import sys
 if os.name == "nt":
     os.system("")  # enables ANSI colours in the Windows console
 
-try:
-    import requests  # noqa: F401
-    from bs4 import BeautifulSoup  # noqa: F401
-    from tqdm import tqdm  # noqa: F401
-except ImportError as e:
-    print(f"Module manquant ({e.name}). Installez les dépendances : python -m pip install -r requirements.txt")
-    sys.exit(1)
+
+def ensure_requirements():
+    """Install requirements.txt into the running Python (the venv when
+    launched by start.ps1) if a module is missing, e.g. yt-dlp after an
+    update added it."""
+    import importlib.util
+    modules = ("requests", "bs4", "tqdm", "yt_dlp", "Crypto", "av")
+    missing = [m for m in modules if importlib.util.find_spec(m) is None]
+    if not missing:
+        return
+    import subprocess
+    print(f"Modules manquants : {', '.join(missing)} — installation dans {sys.executable} ...")
+    req = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
+    subprocess.call([sys.executable, "-m", "pip", "install", "-r", req])
+    importlib.invalidate_caches()
+    still = [m for m in modules if importlib.util.find_spec(m) is None]
+    if still:
+        print(f"Toujours manquants : {', '.join(still)}. Lancez : \"{sys.executable}\" -m pip install -r requirements.txt")
+        if any(m in still for m in ("requests", "bs4", "tqdm")):
+            sys.exit(1)
+
+
+ensure_requirements()
 
 from src.var import Colors, print_status, print_separator
 from src.utils.config.config import get_setting, set_setting
