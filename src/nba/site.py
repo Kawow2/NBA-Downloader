@@ -715,7 +715,9 @@ class Site:
                                 and self._looks_like_video_host(u) and _EMBED_PATH.search(urlparse(u).path):
                             add(u, node)
                 continue
-            if _in_chrome(node, strict=False):
+            # On an intermediate page (a blog), headers/sidebars hold social
+            # links (youtube.com, facebook...) that aren't the player.
+            if _in_chrome(node, strict=gateway):
                 continue
 
             if node.name in ("iframe", "video", "source", "embed"):
@@ -734,9 +736,12 @@ class Site:
                 if gateway:
                     if _is_blocked(url):
                         continue
-                    # A same-domain iframe can be the player wrapper itself.
+                    # A same-domain iframe can be the player wrapper itself;
+                    # links only count when they point at an embed/video path
+                    # (not "https://www.youtube.com/" social buttons).
                     if node.name in ("iframe", "video", "source", "embed") or \
-                            url_host != page_host and any(k in url_host for k in _KNOWN_VIDEO_HOSTS) and self._looks_like_video_host(url):
+                            url_host != page_host and any(k in url_host for k in _KNOWN_VIDEO_HOSTS) \
+                            and _EMBED_PATH.search(urlparse(url).path) and self._looks_like_video_host(url):
                         add(url, node)
                     continue
                 if self._is_own_host(url):

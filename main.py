@@ -20,7 +20,8 @@ def ensure_requirements():
     launched by start.ps1) if a module is missing, e.g. yt-dlp after an
     update added it."""
     import importlib.util
-    modules = ("requests", "bs4", "tqdm", "yt_dlp", "Crypto", "av")
+    # curl_cffi: lets yt-dlp impersonate a browser (required by Dailymotion)
+    modules = ("requests", "bs4", "tqdm", "yt_dlp", "curl_cffi", "Crypto", "av", "cloudscraper")
     missing = [m for m in modules if importlib.util.find_spec(m) is None]
     if not missing:
         return
