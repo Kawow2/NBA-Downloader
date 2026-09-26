@@ -212,11 +212,11 @@ def process_game(site, url, cli_dest):
             print_status(f"Déjà présent : {out}", "success")
             done.append(out)
             continue
-        ok = download_part(part.url, out, page_url=game.url)
+        ok = download_part(part.url, out, page_url=part.referer or game.url)
         if not ok:
             for alt_server, alt_part in alternatives(servers, server, idx):
                 print_status(f"Nouvel essai sur le serveur « {alt_server.name} »...", "warning")
-                if download_part(alt_part.url, out, page_url=game.url):
+                if download_part(alt_part.url, out, page_url=alt_part.referer or game.url):
                     ok = True
                     break
         if ok:

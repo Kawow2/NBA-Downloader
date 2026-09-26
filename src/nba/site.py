@@ -44,8 +44,9 @@ _BLOCKED_HOSTS = (
     "pinterest.", "instagram.", "tiktok.", "discord.", "disqus.", "gravatar.", "wordpress.",
     "google.", "googleapis.", "gstatic.", "googletagmanager.", "doubleclick.", "cloudflare.",
     "jsdelivr.", "jquery.", "bootstrapcdn.", "fontawesome.", "addtoany.", "sharethis.",
-    "linkedin.", "tumblr.", "paypal.", "patreon.", "amazon.", "yandex.ru/metrika", "mc.yandex",
+    "linkedin.", "tumblr.", "paypal.", "patreon.", "amazon.", "yandex.ru/metrika", "mc.yandex.",
     "histats.", "statcounter.", "schema.org", "w3.org", "gmpg.org", "ogp.me",
+    "highperformanceformat.", "googlesyndication.", "adsterra", "profitablecpm", "ucoz.net",
 )
 
 # Path shapes used by embeddable video hosts (voe /e/xxx, ok.ru
@@ -70,11 +71,35 @@ _PART_RE = re.compile(
     re.IGNORECASE,
 )
 _WORD_NUM = {"first": 1, "second": 2, "third": 3, "fourth": 4}
-_SERVER_RE = re.compile(r"\b(server|serveur|mirror|source|player|lecteur|link|lien|host)\s*#?\s*(\d{1,2}|[a-z]\b)", re.IGNORECASE)
+_SERVER_RE = re.compile(r"\b(server|serveur|mirror|source|player|lecteur|link|lien|host)\s*#?\s*(\d{1,2}|[a-z]\b)(\s*\([^)]{1,20}\))?", re.IGNORECASE)
+# Buttons leading to an intermediate page that holds the actual player
+# (basketball-video.com: "Server #1 (OK)" + a "Watch" button to a blog page).
+_WATCH_TEXT = re.compile(r"\b(watch|play|stream|server|mirror|link|part|voir|regarder)\b", re.IGNORECASE)
 _LABEL_HINT = re.compile(
     r"\b(part(?:ie)?|pt\.?\s*\d|half|quarter|qtr|q[1-4]|server|serveur|mirror|source|player|lecteur|link|lien|full game|overtime|ot)\b",
     re.IGNORECASE,
 )
+
+
+def _is_blocked(url):
+    """Domain-aware match against _BLOCKED_HOSTS ("x.com" must not match
+    "guideanimaux.com"): "name." matches a domain label, "a.b" a domain or
+    its subdomains, "a.b/path" a URL prefix, anything else a host substring."""
+    host = (urlparse(url).hostname or "").lower()
+    low = url.lower()
+    for b in _BLOCKED_HOSTS:
+        if "/" in b:
+            if b in low:
+                return True
+        elif b.endswith("."):
+            if host.startswith(b) or ("." + b) in host:
+                return True
+        elif "." in b:
+            if host == b or host.endswith("." + b):
+                return True
+        elif b in host:
+            return True
+    return False
 
 
 def normalize_text(text):
@@ -88,7 +113,7 @@ def parse_date(text):
     if not text:
         return None
     t = text.lower()
-    m = re.search(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?[\s,\-_./]*(\d{1,2})(?:st|nd|rd|th)?[\s,\-_./]+(\d{4})\b", t)
+    m = re.search(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?[\s,\-_./]*(\d{1,2})(?:st|nd|rd|th)?(?:\s*-\s*\d{1,2})?[\s,\-_./]+(\d{4})\b", t)
     if m:
         month, day, year = MONTHS[m.group(1)], int(m.group(2)), int(m.group(3))
     else:
@@ -135,7 +160,7 @@ def _in_chrome(tag, strict=True):
     """True if tag sits in site chrome. strict (game lists) also skips
     'related'/'popular' blocks; the lenient mode (player detection) only
     skips sidebars, footers and comments so player tab bars survive."""
-    pattern = (r"\b(sidebar|widget|menu|navigation|breadcrumbs?|comments?|related|popular|site-header|site-footer|footer)\b"
+    pattern = (r"\b(sidebar|widget|menu|navigation|breadcrumbs?|comments?|related|popular|site-header|site-footer|footer)\b|\baside"
                if strict else r"\b(sidebar|widget|comments?|site-footer|footer)\b")
     for parent in tag.parents:
         if not isinstance(parent, Tag):
@@ -160,10 +185,11 @@ class Game:
 
 
 class Part:
-    def __init__(self, url, label, number=None):
+    def __init__(self, url, label, number=None, referer=None):
         self.url = url
         self.label = label
         self.number = number
+        self.referer = referer  # page embedding the player, if not the game page
 
     def __repr__(self):
         return f"Part({self.number}, {self.label!r}, {self.url})"
@@ -216,7 +242,7 @@ def _server_label(label):
         return None
     m = _SERVER_RE.search(label)
     if m:
-        return f"{m.group(1).capitalize()} {m.group(2).upper()}"
+        return f"{m.group(1).capitalize()} {m.group(2).upper()}{(m.group(3) or '').rstrip()}"
     return None
 
 
@@ -262,19 +288,20 @@ class Site:
             set_setting("nba_user_agent", ua)
         self._setup_session()
 
-    def get(self, url, method="GET", data=None, allow_error=False):
+    def get(self, url, method="GET", data=None, allow_error=False, referer=None):
+        headers = {"Referer": referer} if referer else None
         for attempt in range(2):
             try:
                 if method == "POST":
-                    resp = self.session.post(url, data=data, timeout=20)
+                    resp = self.session.post(url, data=data, timeout=20, headers=headers)
                 else:
-                    resp = self.session.get(url, timeout=20)
+                    resp = self.session.get(url, timeout=20, headers=headers)
             except requests.RequestException as e:
                 if allow_error:
                     return None
                 print_status(f"Connexion impossible à {url} : {e}", "error")
                 return None
-            if self._is_cloudflare_challenge(resp) and attempt == 0 and not self._cf_prompted:
+            if self._is_cloudflare_challenge(resp) and attempt == 0 and not self._cf_prompted and self._is_own_host(url):
                 self._cf_prompted = True
                 self._ask_cloudflare_cookie()
                 continue
@@ -304,9 +331,12 @@ class Site:
     # --------------------------------------------------------- game listings
     def extract_games(self, html, page_url):
         soup = BeautifulSoup(html, "html.parser")
+        # uCoz (basketball-video.com) lists entries in #allEntries; anything
+        # outside it is sidebars / "popular" blocks.
+        root = soup.select_one("#allEntries") or soup
         found = {}
         order = []
-        for a in soup.find_all("a", href=True):
+        for a in root.find_all("a", href=True):
             href = urljoin(page_url, a["href"].strip()).split("#")[0]
             if not href.startswith("http") or not self._is_own_host(href):
                 continue
@@ -442,13 +472,33 @@ class Site:
             title = soup.title.get_text(" ", strip=True)
         game = Game(url, title)
 
-        candidates = self._collect_embeds(soup, url, depth=0)
+        candidates = []
+        for c in self._collect_embeds(soup, url, depth=0):
+            if not c.get("gateway"):
+                candidates.append(c)
+                continue
+            # "Watch" button to an intermediate page: the players are there.
+            found = self._resolve_gateway(c["url"], url)
+            if self.debug:
+                print_status(f"[debug] page intermédiaire {c['url']} : {len(found)} lecteur(s)", "info")
+            for sub in found:
+                sub["label"] = " / ".join(p for p in (c["label"], sub["label"]) if p)
+                sub["referer"] = c["url"]
+                candidates.append(sub)
+            if not found:
+                candidates.append(c)  # yt-dlp will still try the page itself
         servers = self._group(candidates)
         if self.debug:
             print_status(f"[debug] {len(candidates)} lecteur(s) détecté(s) :", "info")
             for c in candidates:
                 print(f"    - label={c['label']!r:40} url={c['url']}")
         return game, servers
+
+    def _resolve_gateway(self, url, referer):
+        html = self.get(url, allow_error=True, referer=referer)
+        if not html:
+            return []
+        return self._collect_embeds(BeautifulSoup(html, "html.parser"), url, depth=1, gateway=True)
 
     def _decode_wrapped_url(self, url):
         """Unwrap same-site redirectors ('/go?url=<base64>', '?link=https...')."""
@@ -501,7 +551,7 @@ class Site:
     def _looks_like_video_host(url):
         low = url.lower()
         host = (urlparse(url).hostname or "").lower()
-        if any(b in low for b in _BLOCKED_HOSTS):
+        if _is_blocked(url):
             # vk video / google drive are legit hosts even though their
             # parent domain is otherwise blocked for share buttons.
             if not ("drive.google" in low or "vk.com/video" in low):
@@ -523,7 +573,11 @@ class Site:
                     labels.setdefault(val.lstrip("#"), text)
         return labels
 
-    def _collect_embeds(self, soup, page_url, depth):
+    def _collect_embeds(self, soup, page_url, depth, gateway=False):
+        """Players on a page, in page order. gateway=True parses a third-party
+        intermediate page: only iframes and known video hosts count there,
+        since everything else is that site's own content."""
+        page_host = _strip_www((urlparse(page_url).hostname or "").lower())
         tab_labels = self._tab_labels(soup)
         candidates = []
         seen = set()
@@ -590,7 +644,7 @@ class Site:
                     context_label = text
                 continue
             if not isinstance(node, Tag) or node.name in ("script", "style", "head", "meta", "link"):
-                if isinstance(node, Tag) and node.name == "script" and node.string and depth == 0:
+                if isinstance(node, Tag) and node.name == "script" and node.string and (depth == 0 or gateway):
                     for m in re.finditer(r"(?:https?:)?//[^\s'\"<>\\]+", node.string):
                         u = self._normalize_url(m.group(0).replace("\\/", "/"), page_url)
                         host = (urlparse(u).hostname or "").lower() if u else ""
@@ -613,6 +667,14 @@ class Site:
                 url = self._normalize_url(val, page_url)
                 if not url:
                     continue
+                url_host = _strip_www((urlparse(url).hostname or "").lower())
+                if gateway:
+                    if url_host == page_host or _is_blocked(url):
+                        continue
+                    if node.name in ("iframe", "video", "source", "embed") or \
+                            any(k in url_host for k in _KNOWN_VIDEO_HOSTS) and self._looks_like_video_host(url):
+                        add(url, node)
+                    continue
                 if self._is_own_host(url):
                     # A same-site player page (iframe) or a "Part 2" page:
                     # follow it once and collect what it embeds.
@@ -621,13 +683,18 @@ class Site:
                         follow.append((url, own_label(node) or pane_label(node) or context_label))
                     continue
                 if node.name in ("iframe", "video", "source", "embed"):
-                    if not any(b in url.lower() for b in _BLOCKED_HOSTS) or "drive.google" in url:
+                    if not _is_blocked(url) or "drive.google" in url:
                         add(url, node)
                 elif self._looks_like_video_host(url) or (
                         node.name in ("a", "button", "li", "option", "span", "div")
                         and _PART_RE.search(node.get_text(" ", strip=True) or "")
-                        and not any(b in url.lower() for b in _BLOCKED_HOSTS)):
+                        and not _is_blocked(url)):
                     add(url, node)
+                elif depth == 0 and node.name == "a" and not _is_blocked(url) \
+                        and _WATCH_TEXT.search(node.get_text(" ", strip=True) or ""):
+                    add(url, node)
+                    if url.rstrip("/") in by_key:
+                        by_key[url.rstrip("/")]["gateway"] = True
 
         for url, label in follow:
             html = self.get(url, allow_error=True)
@@ -654,7 +721,7 @@ class Site:
             if c["host"] not in srv.host.split(" / "):
                 srv.host = f"{srv.host} / {c['host']}"
             number = _part_number(c["label"])
-            srv.parts.append(Part(c["url"], c["label"], number))
+            srv.parts.append(Part(c["url"], c["label"], number, c.get("referer")))
 
         result = []
         for srv in servers.values():
@@ -672,6 +739,12 @@ class Site:
                     p.number = n
                     used.add(n)
                     p.label = f"Part {n}" + (f" ({p.label})" if p.label else "")
+            for p in srv.parts:
+                # The server name is already shown as the list's title.
+                short = _SERVER_RE.sub("", p.label)
+                short = re.sub(r"\(\s*\)|#", "", short)
+                short = re.sub(r"\s*/\s*/\s*|^\s*/\s*|\s*/\s*$", " ", short).strip(" -/")
+                p.label = short or f"Part {p.number}"
             srv.parts.sort(key=lambda p: p.number)
             result.append(srv)
         return result
