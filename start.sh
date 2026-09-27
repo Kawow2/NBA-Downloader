@@ -26,7 +26,9 @@ if [ "$1" = "--tmux" ]; then
     if [ -z "$TMUX" ]; then
         if command -v tmux >/dev/null 2>&1; then
             # -A: reattach to the running session if there is one.
-            exec tmux new-session -A -s downloader "$(printf '%q ' "$PWD/start.sh" "$@")"
+            # START_SH_IN_TMUX: pause at the end, or tmux would close the
+            # window (and any error message) as soon as the program stops.
+            exec tmux new-session -A -s downloader "START_SH_IN_TMUX=1 $(printf '%q ' "$PWD/start.sh" "$@")"
         fi
         echo "tmux n'est pas installé (ex. sudo apt install tmux) : lancement sans tmux."
     fi
@@ -70,4 +72,10 @@ fi
 ARGS=()
 [ -n "$CHEMIN_ANIME" ] && ARGS+=(--anime-dir "$CHEMIN_ANIME")
 [ -n "$CHEMIN_NBA" ] && ARGS+=(--nba-dir "$CHEMIN_NBA")
+if [ -n "$START_SH_IN_TMUX" ]; then
+    "$VENV_PY" main.py "${ARGS[@]}" "$@"
+    echo
+    read -rp "Programme terminé. Entrée pour fermer la session tmux... " _
+    exit 0
+fi
 exec "$VENV_PY" main.py "${ARGS[@]}" "$@"

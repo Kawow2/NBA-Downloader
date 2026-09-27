@@ -105,23 +105,37 @@ class Launcher:
 
     # ------------------------------------------------------------- folders
     def configured_dir(self, category):
-        return self.overrides.get(f"--{category}-dir") or self.get_setting(f"{category}_default_dir")
+        path = self.overrides.get(f"--{category}-dir") or self.get_setting(f"{category}_default_dir")
+        # A relative path (e.g. "2", typed at the folder question as if it
+        # were the menu) isn't a real choice: ask again.
+        if path and not os.path.isabs(os.path.expanduser(path)):
+            return None
+        return path
 
     def folder(self, category):
         return self.configured_dir(category) or fallback_dir(category)
 
     def ask_folder(self, category, first_time=False):
         from src.var import Colors
+        from src.utils.check.check_folder import folder_problem
         label = "des animes" if category == "anime" else "de la NBA"
         current = self.folder(category)
         if first_time:
-            print(f"\n{Colors.BOLD}{Colors.HEADER}📁 Premier lancement : dossier {label}{Colors.ENDC}")
-            print(f"  {Colors.DIM}(le dossier de la bibliothèque Plex correspondante){Colors.ENDC}")
+            print(f"\n{Colors.BOLD}{Colors.HEADER}{'─' * 64}\n📁 PREMIER LANCEMENT {'ANIME' if category == 'anime' else 'NBA'} : "
+                  f"OÙ RANGER LES VIDÉOS ?\n{'─' * 64}{Colors.ENDC}")
+            print(f"  Tapez le chemin complet du dossier (celui de la bibliothèque Plex), ex. "
+                  f"{'/srv/plex/Anime' if category == 'anime' else '/srv/plex/Sports/NBA'}")
+            print(f"  ou Entrée pour {current}. Modifiable ensuite dans Réglages.")
         if f"--{category}-dir" in self.overrides:
             print(f"  {Colors.WARNING}Ce lancement utilise --{category}-dir {self.overrides[f'--{category}-dir']} "
                   f"(start.sh / start.ps1) : il reste prioritaire.{Colors.ENDC}")
-        typed = _ask(f"Dossier {label} (Entrée = {current}) : ").strip().strip('"\'')
-        path = os.path.expanduser(typed) if typed else current
+        while True:
+            typed = _ask(f"Dossier {label} (Entrée = {current}) : ").strip().strip('"\'')
+            path = os.path.expanduser(typed) if typed else current
+            problem = folder_problem(path)
+            if not problem:
+                break
+            print(f"  {Colors.FAIL}❌ {problem}{Colors.ENDC}")
         self.set_setting(f"{category}_default_dir", path)
         print(f"  {Colors.OKGREEN}✅ Dossier {label} : {path}{Colors.ENDC}")
 
