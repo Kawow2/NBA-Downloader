@@ -39,7 +39,8 @@ sudo apt install ffmpeg python3-venv   # Debian/Ubuntu (dnf, pacman... selon la 
 3. **Serveur** : choisir le serveur (VOE, Filemoon, OK.ru, Streamtape...).
 4. **Parties** : taper les parties voulues, ex. `1-2-3` (= parties 1, 2 et 3), `2`, ou Entrée pour toutes.
 5. **Chemin** : Entrée = chemin par défaut, ou taper un autre chemin (le programme propose alors de le garder comme défaut).
-6. **Téléchargement** en .mp4 (sans ré-encodage). Si plusieurs parties sont choisies, elles sont toujours fusionnées en un seul fichier (ré-encodées seulement si elles viennent de serveurs différents). Si une partie échoue sur un serveur, la même partie est retentée sur les autres serveurs.
+6. **Nom du fichier** : le titre affiché dans la liste / la recherche (ou le match choisi sur une page qui en contient plusieurs). S'il ne suffit pas à identifier un match (pas de « A vs B » ou pas de date), le programme demande un nom.
+7. **Téléchargement** en .mp4 (sans ré-encodage). Si plusieurs parties sont choisies, elles sont toujours fusionnées en un seul fichier (ré-encodées seulement si elles viennent de serveurs différents). Si une partie échoue sur un serveur, la même partie est retentée sur les autres serveurs. Une fois le match terminé, ses fichiers temporaires (`.part`, `.ytdl`) sont supprimés ; ceux d'anciens téléchargements interrompus sont proposés à la suppression. Après un Ctrl+C, relancer le même match reprend le téléchargement.
 
 ## Chemin par défaut
 
