@@ -3,3 +3,5 @@ requests
 beautifulsoup4
 av
 pycryptodome
+yt-dlp[default,curl-cffi]
+cloudscraper
