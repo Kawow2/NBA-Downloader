@@ -20,6 +20,7 @@ from src.nba.plex import plex_target
 from src.nba.downloader import (download_part, merge_parts, ffmpeg_hint, ffmpeg_install_command, configure,
                                 SETTINGS, temp_files)
 from src.utils.mp4_faststart import ensure_faststart
+from src.utils.ffmpeg_progress import media_duration
 
 FALLBACK_DEFAULT_DIR = os.path.join(os.path.expanduser("~"), "Videos", "NBA")
 
@@ -147,7 +148,7 @@ def choose_parts(server):
         print(f"  {Colors.BOLD}{i:>2}.{Colors.ENDC} {p.label}")
     print_separator()
     while True:
-        picked = parse_parts(ask(f"Parties à télécharger (ex : 1-2-3, Entrée = toutes) : "), len(server.parts))
+        picked = parse_parts(ask("Parties à télécharger (ex : 1-2-3, Entrée = toutes) : "), len(server.parts))
         if picked:
             return picked
         print_status("Sélection invalide.", "error")
@@ -174,21 +175,6 @@ def choose_dest(cli_dest):
         set_setting("nba_default_dir", typed)
         print_status(f"Chemin par défaut enregistré : {typed}", "success")
     return typed
-
-
-def alternatives(servers, chosen, part_index):
-    """Same part on the other servers, used if the chosen one fails."""
-    part = chosen.parts[part_index]
-    alts = []
-    for s in servers:
-        if s is chosen:
-            continue
-        same = [p for p in s.parts if p.number == part.number]
-        if same:
-            alts.append((s, same[0]))
-        elif len(s.parts) == len(chosen.parts):
-            alts.append((s, s.parts[part_index]))
-    return alts
 
 
 def file_name(game, dest, section, listed):
@@ -234,70 +220,121 @@ def process_game(site, url, cli_dest, listed=None):
     dest = choose_dest(cli_dest)
 
     folder, stem = file_name(game, dest, section, listed)
-    print_status(f"Fichier : {os.path.join(folder, stem)}.mp4", "info")
-    single = len(server.parts) == 1
-    # Several parts are always joined into one file once all are downloaded.
-    merge = len(picked) > 1
-    if merge and not check_ffmpeg_installed():
+    final_path = os.path.join(folder, stem + ".mp4")
+    print_status(f"Fichier : {final_path}", "info")
+    if os.path.exists(final_path):
+        print_status(f"Déjà présent : {final_path}", "success")
+        return
+    can_merge = check_ffmpeg_installed()
+    if len(picked) > 1 and not can_merge:
         print_status(f"ffmpeg est nécessaire pour fusionner les parties : {ffmpeg_install_command()}. "
                      "En attendant, elles seront gardées séparément (pt1, pt2...).", "warning")
 
-    final_path = os.path.join(folder, stem + ".mp4")
-    if merge and os.path.exists(final_path):
-        print_status(f"Déjà présent : {final_path}", "success")
-        return
-
+    # Servers cut the game differently (3 parts on one, 2 on another, the
+    # whole game in 1 on a third): part N of one server is not part N of
+    # another. So a failed part is never replaced by another server's part
+    # - that stitched overlapping pieces into 4-hour files. Instead the whole
+    # game is taken from the next server (when every part was asked for).
+    attempts = [(server, picked)]
+    if len(picked) == len(server.parts):
+        attempts += [(s, list(range(len(s.parts)))) for s in servers if s is not server and s.parts]
     done, failed = [], 0
-    SETTINGS["faststart"] = not (merge and check_ffmpeg_installed())
-    for n, idx in enumerate(picked, 1):
-        part = server.parts[idx]
-        out = final_path if single else os.path.join(folder, f"{stem} - pt{idx + 1}.mp4")
-        print_separator(title=f"{part.label} ({n}/{len(picked)})")
-        if os.path.exists(out):
-            print_status(f"Déjà présent : {out}", "success")
-            done.append(out)
-            continue
-        ok = download_part(part.url, out, page_url=part.referer or game.url)
-        if not ok:
-            for alt_server, alt_part in alternatives(servers, server, idx):
-                print_status(f"Nouvel essai sur le serveur « {alt_server.name} »...", "warning")
-                if download_part(alt_part.url, out, page_url=alt_part.referer or game.url):
-                    ok = True
-                    break
-        if ok:
-            print_status(f"Enregistré : {out}", "success")
-            done.append(out)
-        else:
-            failed += 1
-            print_status(f"Impossible de télécharger {part.label}.", "error")
+    for k, (srv, idxs) in enumerate(attempts):
+        if k:
+            print_separator(title=f"SERVEUR SUIVANT : {srv.name}")
+            print_status(f"Le match est repris en entier depuis « {srv.name} » ({len(srv.parts)} partie(s)) : "
+                         "les parties de serveurs différents ne se correspondent pas.", "warning")
+        done, failed = download_server(srv, idxs, game, folder, stem, final_path, can_merge)
+        if not failed:
+            break
+        if k + 1 < len(attempts):
+            print_status(f"{failed} partie(s) impossible(s) à télécharger sur « {srv.name} ».", "error")
 
-    SETTINGS["faststart"] = True
-    if merge and failed:
-        for p in done:
-            ensure_faststart(p)  # kept separately for now: Plex-ready as they are
-    if merge and not failed and check_ffmpeg_installed():
-        if merge_parts(done, final_path):
-            for p in done:
-                try:
-                    os.remove(p)
-                except OSError:
-                    pass
-            done = [final_path]
-            print_status(f"Match complet : {final_path}", "success")
-        else:
-            print_status("La fusion a échoué : les parties sont gardées séparément (Plex les regroupe).", "warning")
-            for p in done:
-                ensure_faststart(p)
-    elif merge and failed:
-        print_status("Toutes les parties n'ont pas été téléchargées : pas de fusion. Relancez le même match : "
-                     "les parties déjà là sont gardées, puis tout est fusionné.", "warning")
+    if not failed:
+        remove_other_server_parts(folder, stem, keep=done)
 
     print_separator(title="RÉSUMÉ")
     for p in done:
         print(f"  {Colors.OKGREEN}✔{Colors.ENDC} {p}")
     if failed:
         print(f"  {Colors.FAIL}✘ {failed} partie(s) en échec{Colors.ENDC}")
+        print_status("Relancez le même match plus tard : les parties déjà téléchargées sont gardées.", "info")
     clean_temp_files(folder, stem, keep_own=bool(failed))
+
+
+def _hours(seconds):
+    minutes = int(seconds // 60)
+    return f"{minutes // 60} h {minutes % 60:02d}"
+
+
+def _server_tag(server):
+    return re.sub(r"[^\w]+", " ", server.name).strip() or "serveur"
+
+
+def download_server(server, idxs, game, folder, stem, final_path, can_merge):
+    """Download the parts idxs of one server, then join them into
+    final_path. Returns (files, number of failed parts)."""
+    merge = len(idxs) > 1
+    tag = _server_tag(server)
+    done, failed = [], 0
+    SETTINGS["faststart"] = not (merge and can_merge)
+    for n, idx in enumerate(idxs, 1):
+        part = server.parts[idx]
+        # Named after the server: a later run can't mix its parts with
+        # another server's (they don't cut the game at the same places).
+        out = final_path if len(server.parts) == 1 else os.path.join(folder, f"{stem} [{tag}] - pt{idx + 1}.mp4")
+        print_separator(title=f"{server.name} · {part.label} ({n}/{len(idxs)})")
+        if os.path.exists(out):
+            print_status(f"Déjà présent : {out}", "success")
+            done.append(out)
+            continue
+        if download_part(part.url, out, page_url=part.referer or game.url):
+            print_status(f"Enregistré : {out}", "success")
+            done.append(out)
+        else:
+            failed += 1
+            print_status(f"Impossible de télécharger {part.label} sur « {server.name} ».", "error")
+            if len(idxs) == len(server.parts):
+                break  # the whole game will come from another server
+    SETTINGS["faststart"] = True
+
+    if failed:
+        for p in done:
+            ensure_faststart(p)  # kept for a later run: Plex-ready as they are
+        return done, failed
+    if merge and can_merge:
+        durations = [media_duration(p) or 0 for p in done]
+        total = sum(durations)
+        if total > 3.5 * 3600:
+            print_status(f"Attention : {len(done)} parties pour {_hours(total)} au total, anormalement long "
+                         "pour un match (parties en double sur ce serveur ?).", "warning")
+        if merge_parts(done, final_path):
+            for p in done:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+            print_status(f"Match complet : {final_path} ({_hours(total)})", "success")
+            return [final_path], 0
+        print_status("La fusion a échoué : les parties sont gardées séparément (Plex les regroupe).", "warning")
+        for p in done:
+            ensure_faststart(p)
+    return done, 0
+
+
+def remove_other_server_parts(folder, stem, keep):
+    """Parts left by a server that failed midway (another one then gave
+    the whole game): useless once the game is complete."""
+    if not os.path.isdir(folder):
+        return
+    keep = {os.path.abspath(p) for p in keep}
+    for name in os.listdir(folder):
+        path = os.path.abspath(os.path.join(folder, name))
+        if name.startswith(stem + " [") and re.search(r"\] - pt\d+\.mp4$", name) and path not in keep:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 def clean_temp_files(folder, stem, keep_own=False):

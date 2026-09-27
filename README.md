@@ -116,7 +116,7 @@ Sur un serveur de test qui bride chaque connexion comme les hébergeurs : épiso
 4. **Parties** : taper les parties voulues, ex. `1-2-3` (= parties 1, 2 et 3), `2`, ou Entrée pour toutes.
 5. **Chemin** : Entrée = dossier NBA, ou taper un autre chemin (le programme propose alors de le garder comme défaut).
 6. **Nom du fichier** : le titre affiché dans la liste / la recherche (ou le match choisi sur une page qui en contient plusieurs). S'il ne suffit pas à identifier un match (pas de « A vs B » ou pas de date), le programme demande un nom.
-7. **Téléchargement** en .mp4 (sans ré-encodage). Si plusieurs parties sont choisies, elles sont toujours fusionnées en un seul fichier (ré-encodées seulement si elles viennent de serveurs différents). Si une partie échoue sur un serveur, la même partie est retentée sur les autres serveurs. Une fois le match terminé, ses fichiers temporaires (`.part`, `.ytdl`) sont supprimés ; ceux d'anciens téléchargements interrompus sont proposés à la suppression. Après un Ctrl+C, relancer le même match reprend le téléchargement.
+7. **Téléchargement** en .mp4 (sans ré-encodage). Si plusieurs parties sont choisies, elles sont toujours fusionnées en un seul fichier. Les serveurs ne découpent pas le match de la même façon (3 parties sur l'un, 2 ou 1 sur l'autre) : si une partie échoue, le match est repris **en entier** depuis le serveur suivant, jamais complété avec une partie d'un autre serveur (sinon : morceaux en double, fichier de 4 h). Une fois le match terminé, ses fichiers temporaires (`.part`, `.ytdl`) sont supprimés ; ceux d'anciens téléchargements interrompus sont proposés à la suppression. Après un Ctrl+C, relancer le même match reprend le téléchargement.
 
 ## Organisation pour Plex
 
