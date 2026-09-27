@@ -14,6 +14,7 @@ import sys
 from src.var import Colors, print_status, print_separator
 from src.utils.config.config import get_setting, set_setting
 from src.utils.check.check_ffmpeg_installed import check_ffmpeg_installed
+from src.utils.check.check_folder import folder_problem
 from src.nba.site import Site, parse_date
 from src.nba.plex import plex_target
 from src.nba.downloader import (download_part, merge_parts, ffmpeg_hint, ffmpeg_install_command, configure,
@@ -156,10 +157,18 @@ def choose_dest(cli_dest):
         return cli_dest
     current = default_dir()
     print(f"\n{Colors.BOLD}{Colors.HEADER}📁 DOSSIER DE DESTINATION{Colors.ENDC}")
-    typed = ask(f"Chemin (Entrée = {current}) : ").strip('"\'')
+    while True:
+        typed = ask(f"Chemin (Entrée = {current}) : ").strip('"\'')
+        path = os.path.expanduser(typed) if typed else current
+        # Checked before downloading: an unwritable Plex folder used to
+        # crash the program right after this question.
+        problem = folder_problem(path)
+        if not problem:
+            break
+        print_status(problem, "error")
     if not typed:
         return current
-    typed = os.path.expanduser(typed)
+    typed = path
     if os.path.abspath(typed) != os.path.abspath(current) and yes("Utiliser ce chemin par défaut les prochaines fois ?", default=False):
         set_setting("nba_default_dir", typed)
         print_status(f"Chemin par défaut enregistré : {typed}", "success")
@@ -374,6 +383,13 @@ def run(argv=None):
         sys.argv = [sys.argv[0]] + list(argv)
     try:
         main()
+    except Exception:
+        # Shown instead of a bare crash (inside tmux the window would
+        # close before the error could be read).
+        import traceback
+        traceback.print_exc()
+        print(f"\n{Colors.FAIL}Erreur inattendue : copiez le message ci-dessus pour la signaler.{Colors.ENDC}", flush=True)
+        sys.exit(1)
     except KeyboardInterrupt:
         print(f"\n{Colors.WARNING}Interrompu. Relancez le même match pour reprendre le téléchargement "
               f"là où il s'est arrêté.{Colors.ENDC}", flush=True)

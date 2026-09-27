@@ -337,7 +337,11 @@ def _download_builtin(embed_url, out_path, page_url):
 
 
 def download_part(embed_url, out_path, page_url=None):
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    try:
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    except OSError as e:
+        print_status(f"Impossible de créer {os.path.dirname(out_path)} : {e.strerror or e}", "error")
+        return False
     host = (urlparse(embed_url).hostname or "").lower()
     path = urlparse(embed_url).path.lower()
     methods = [("extracteurs", lambda: _download_with_extractors(embed_url, out_path)),
