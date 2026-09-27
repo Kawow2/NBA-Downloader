@@ -8,6 +8,7 @@ from src.utils.download.download_video  import download_video
 from src.utils.ts.convert_ts_to_mp4     import convert_ts_to_mp4
 from src.utils.download.verify_video_file import verify_or_warn
 from src.utils.config.config            import get_setting
+from src.utils.get.get_save_directory import plex_show_name, plex_season_number
 import time
 
 # Caches which season directories have already been tagged with an external
@@ -817,8 +818,8 @@ def download_episode(episode_num, url, video_source, anime_name, save_dir, use_t
         episode_int = int(episode_num)
     except (TypeError, ValueError):
         episode_int = None
-    season_int = season_number if season_number else 1
-    safe_anime_name = re.sub(r'[:"/\\|?*<>]', '', anime_name) if anime_name else 'episode'
+    season_int = plex_season_number(season_dir, season_number)
+    safe_anime_name = plex_show_name(anime_name) if anime_name else 'episode'
     if episode_int is not None:
         filename = f"{safe_anime_name} - S{season_int:02d}E{episode_int:02d}.mp4"
     else:

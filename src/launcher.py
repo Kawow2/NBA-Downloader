@@ -32,7 +32,7 @@ USAGE = """Utilisation :
   python main.py nba [options]        téléchargeur NBA (python main.py nba --help)
   python main.py --set-anime-dir DOSSIER   dossier par défaut des animes
   python main.py --set-nba-dir DOSSIER     dossier par défaut de la NBA
-  python main.py --faststart DOSSIER       optimise les .mp4 déjà téléchargés (lecture immédiate dans Plex)
+  python main.py --faststart DOSSIER       optimise/répare les .mp4 déjà téléchargés (lecture immédiate dans Plex, son)
   --anime-dir / --nba-dir DOSSIER     dossier pour ce lancement seulement"""
 
 
@@ -154,7 +154,7 @@ class Launcher:
             print(f"  5. NBA   : morceaux téléchargés en parallèle             : {self.get_setting('nba_threads') or 32}")
             print(f"  6. NBA   : qualité max                                   : "
                   f"{'la meilleure' if quality == 'best' else quality + 'p'}")
-            print("  7. Optimiser les .mp4 déjà téléchargés (faststart : lecture immédiate dans Plex)")
+            print("  7. Optimiser/réparer les .mp4 déjà téléchargés (lecture immédiate dans Plex, son cassé)")
             print("  0. Retour")
             choice = _ask("Choix : ").strip()
             if choice in ("", "0", "q"):

@@ -74,19 +74,23 @@ Tout est mémorisé dans `src/utils/config/config.json`. Le réglage `7` optimis
 
 Chaque `.mp4` téléchargé (anime et NBA) a son index au **début** du fichier : Plex démarre la lecture tout de suite au lieu de parcourir tout le fichier. Les fichiers qui ne l'ont pas sont réécrits automatiquement à la fin du téléchargement (copie sans ré-encodage, quelques secondes à une minute selon le disque). Pour les fichiers téléchargés avant cette version : `python main.py --faststart "/mnt/plexmedia/Vidéos"` (ou `3. Réglages` → `7`).
 
+La même commande **répare le son** des épisodes anime convertis par les versions précédentes (son muet ou qui grésille) : la conversion `.ts` → `.mp4` y enregistrait une fréquence audio fausse (48000 Hz au lieu de 44100 Hz, par ex.). La vraie fréquence est retrouvée d'après la durée, et les données audio sont gardées telles quelles, sans ré-encodage.
+
 ## Serveur Plex sur un portable Linux
 
 Disposition conseillée (deux bibliothèques Plex de type **Séries TV**) :
 
 ```
 /srv/plex/Anime/                ← dossier des animes   = bibliothèque « Anime »
-    roshidere/saison1/…
+    Dragon Ball/Season 01/Dragon Ball - S01E01.mp4
+    Dragon Ball/Specials/Dragon Ball - S00E01.mp4      (films, OAV)
 /srv/plex/Sports/NBA/           ← dossier NBA          (bibliothèque « Sports » = /srv/plex/Sports)
     Season 2026/NBA - 2026-06-13 - New York Knicks vs San Antonio Spurs - NBA Finals Game 5.mp4
 ```
 
 - Plex tourne sous l'utilisateur `plex` : il doit pouvoir lire ces dossiers, ex. `sudo chmod -R o+rX /srv/plex`.
 - Anime-Sama peut demander le cookie Cloudflare `cf_clearance` et le User-Agent d'un navigateur : récupérez-les sur un PC **du même réseau** (le cookie est lié à l'adresse IP publique) avec le même navigateur.
+- Les dossiers anime d'anciennes versions (`dragon-ball/saison1`) sont renommés automatiquement (`Dragon Ball/Season 01`, épisodes compris) au prochain téléchargement de cet anime ; un dossier `Season 1` créé par Sonarr est gardé tel quel.
 - Identification Plex des animes (fichier `.match` MyAnimeList, ou tag TVDB/IMDb dans le nom du dossier) : réglage `3. Settings` du menu anime.
 
 ## Anime : téléchargements en parallèle

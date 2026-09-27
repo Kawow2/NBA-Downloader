@@ -51,6 +51,40 @@ def sanitize_ts_file(filepath):
     return False
 
 
+# Index at the start of the file (Plex starts playing at once).
+_MP4_OPTIONS = {"movflags": "+faststart"}
+
+
+def _copy_stream(output_container, in_stream, codec_name):
+    """Output stream carrying the input's codec parameters (sample rate,
+    channels, AAC config...). A bare add_stream(codec_name) gets the
+    encoder defaults instead (48000 Hz stereo): the .mp4 then describes
+    the sound wrongly, and players - or any later remux - give silence or
+    crackles."""
+    try:
+        out = output_container.add_stream_from_template(in_stream)  # PyAV >= 14
+    except AttributeError:
+        try:
+            out = output_container.add_stream(template=in_stream)
+        except Exception:
+            out = output_container.add_stream(
+                getattr(getattr(in_stream, "codec_context", None), "name", None) or codec_name)
+    if getattr(in_stream, "time_base", None):
+        out.time_base = in_stream.time_base
+    return out
+
+
+def _start_shift(*streams):
+    """{stream index: ticks to subtract} so the earliest stream starts at 0
+    and the others keep their offset to it (audio/video sync)."""
+    starts = [(st, st.start_time * st.time_base) for st in streams
+              if st is not None and st.start_time is not None and st.time_base]
+    if not starts:
+        return {}
+    base = min(start for _, start in starts)
+    return {st.index: int(round(base / st.time_base)) for st, _ in starts}
+
+
 def fix_ts(infile, outfile):
     label = os.path.basename(outfile)
     print_status(f"Converting to mp4: {label}", "loading")
@@ -80,24 +114,13 @@ def _fix_ts_impl(infile, outfile):
         except Exception as final_err:
             raise ValueError(f"Failed to open input file {infile}: {final_err}")
 
-    output_container = av.open(outfile, mode="w")
+    output_container = av.open(outfile, mode="w", options=_MP4_OPTIONS)
 
     in_v = input_container.streams.video[0] if input_container.streams.video else None
     in_a = input_container.streams.audio[0] if input_container.streams.audio else None
 
-    out_v = None
-    if in_v:
-        codec_name = getattr(getattr(in_v, "codec_context", None), "name", None) or "h264"
-        out_v = output_container.add_stream(codec_name)
-        if hasattr(in_v, "time_base") and in_v.time_base:
-            out_v.time_base = in_v.time_base
-
-    out_a = None
-    if in_a:
-        codec_name = getattr(getattr(in_a, "codec_context", None), "name", None) or "aac"
-        out_a = output_container.add_stream(codec_name)
-        if hasattr(in_a, "time_base") and in_a.time_base:
-            out_a.time_base = in_a.time_base
+    out_v = _copy_stream(output_container, in_v, "h264") if in_v else None
+    out_a = _copy_stream(output_container, in_a, "aac") if in_a else None
 
     bsf_v = None
     if in_v:
@@ -109,6 +132,7 @@ def _fix_ts_impl(infile, outfile):
     v_count = 0
     a_count = 0
     last_dts = {}
+    shift = _start_shift(in_v, in_a)
 
     for packet in input_container.demux():
         stype = str(getattr(packet.stream, "type", "")).lower()
@@ -116,6 +140,16 @@ def _fix_ts_impl(infile, outfile):
 
         if "data" in stype:
             continue
+
+        # Start at 0 like ffmpeg does: HLS streams begin at an arbitrary
+        # time (10 s, 1 h...), which some players, Plex included, turn into
+        # silence/black or a shifted sound at the start of the episode.
+        offset = shift.get(st_idx, 0)
+        if offset:
+            if packet.pts is not None:
+                packet.pts -= offset
+            if packet.dts is not None:
+                packet.dts -= offset
 
         if packet.dts is not None:
             if st_idx in last_dts and last_dts[st_idx] != -1 and packet.dts <= last_dts[st_idx]:
@@ -166,7 +200,7 @@ def _fix_ts_impl(infile, outfile):
         except Exception:
             input_container = av.open(infile, mode="r", format="mpegts", options=open_options)
 
-        output_container = av.open(outfile, mode="w")
+        output_container = av.open(outfile, mode="w", options=_MP4_OPTIONS)
 
         in_v = input_container.streams.video[0] if input_container.streams.video else None
         in_a = input_container.streams.audio[0] if input_container.streams.audio else None
