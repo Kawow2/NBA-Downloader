@@ -39,7 +39,7 @@ sudo apt install ffmpeg python3-venv   # Debian/Ubuntu (dnf, pacman... selon la 
 3. **Serveur** : choisir le serveur (VOE, Filemoon, OK.ru, Streamtape...).
 4. **Parties** : taper les parties voulues, ex. `1-2-3` (= parties 1, 2 et 3), `2`, ou Entrée pour toutes.
 5. **Chemin** : Entrée = chemin par défaut, ou taper un autre chemin (le programme propose alors de le garder comme défaut).
-6. **Téléchargement** en .mp4 (sans ré-encodage). Si plusieurs parties sont choisies, elles peuvent être fusionnées en un seul fichier. Si une partie échoue sur un serveur, la même partie est retentée sur les autres serveurs.
+6. **Téléchargement** en .mp4 (sans ré-encodage). Si plusieurs parties sont choisies, elles sont toujours fusionnées en un seul fichier (ré-encodées seulement si elles viennent de serveurs différents). Si une partie échoue sur un serveur, la même partie est retentée sur les autres serveurs.
 
 ## Chemin par défaut
 
@@ -66,7 +66,7 @@ Créez une bibliothèque Plex de type **Séries TV** dont le dossier contient le
 | `--set-default-dir <chemin>` | enregistrer le chemin par défaut |
 | `--site <URL>` | si le site change de domaine (mémorisé) |
 | `--quality 720\|1080\|1440\|2160\|best` | qualité max (défaut 1080p, mémorisée) ; `best` ≈ 20 Go par match chez OK.ru |
-| `--threads <N>` | morceaux téléchargés en parallèle (défaut 16, mémorisé) ; à augmenter sur une connexion rapide |
+| `--threads <N>` | morceaux téléchargés en parallèle (défaut 32, mémorisé) ; à augmenter sur une connexion rapide |
 | `--debug` | enregistre les pages dans `./debug` et affiche les lecteurs détectés |
 
 Si aucun lecteur n'est détecté sur une page (changement de mise en page du site), relancez avec `--debug` : les pages HTML sauvegardées dans `./debug` permettent d'adapter `src/nba/site.py`.

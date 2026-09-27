@@ -26,7 +26,7 @@ from src.nba.hosts import builtin_stream, has_builtin, patch_ytdlp
 # OK.ru throttles each connection, so throughput comes from fetching many
 # HLS fragments at once; and a 1080p cap keeps a game at a few GB instead
 # of ~20 GB in the host's top (1440p/4K) quality.
-SETTINGS = {"max_height": 1080, "threads": 16}
+SETTINGS = {"max_height": 1080, "threads": 32}
 
 
 def configure(max_height=None, threads=None):
@@ -134,15 +134,70 @@ def _stream_signature(path):
     return sorted(line.strip() for line in result.stdout.splitlines() if line.strip())
 
 
+def _probe(path):
+    """(width, height, fps, has_audio, duration) of a video, via ffprobe."""
+    def run(args):
+        return subprocess.run(["ffprobe", "-v", "error"] + args + [path],
+                              capture_output=True, text=True, timeout=60).stdout.strip()
+    try:
+        video = run(["-select_streams", "v:0", "-show_entries", "stream=width,height,r_frame_rate", "-of", "csv=p=0"])
+        audio = run(["-select_streams", "a:0", "-show_entries", "stream=index", "-of", "csv=p=0"])
+        duration = run(["-show_entries", "format=duration", "-of", "csv=p=0"])
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    try:
+        w, h, rate = video.split(",")[:3]
+        num, _, den = rate.partition("/")
+        fps = float(num) / float(den or 1)
+        return int(w), int(h), round(fps, 3) or 25, bool(audio), float(duration or 0)
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def _merge_reencode(paths, out_path):
+    """Join parts whose encodings differ (a part came from a fallback
+    server): re-encode everything to the first part's resolution and frame
+    rate. Much slower than a copy, but always yields one file."""
+    probes = [_probe(p) for p in paths]
+    if None in probes:
+        return False
+    width, height, fps = probes[0][0], probes[0][1], probes[0][2]
+    inputs, chains, labels = [], [], ""
+    for i, (p, pr) in enumerate(zip(paths, probes)):
+        inputs += ["-i", p]
+    extra = len(paths)
+    for i, pr in enumerate(probes):
+        chains.append(f"[{i}:v:0]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                      f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}[v{i}]")
+        if pr[3]:
+            chains.append(f"[{i}:a:0]aresample=48000,aformat=channel_layouts=stereo[a{i}]")
+        else:
+            # A part without sound: silence of the same length.
+            inputs += ["-f", "lavfi", "-t", str(pr[4] or 1), "-i", "anullsrc=r=48000:cl=stereo"]
+            chains.append(f"[{extra}:a:0]anull[a{i}]")
+            extra += 1
+        labels += f"[v{i}][a{i}]"
+    graph = ";".join(chains) + f";{labels}concat=n={len(paths)}:v=1:a=1[v][a]"
+    tmp = out_path + ".part"
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-stats"] + inputs + [
+        "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-b:a", "160k",
+        "-movflags", "+faststart", "-f", "mp4", tmp]
+    print_status("Les parties n'ont pas le même encodage (serveurs différents) : fusion avec ré-encodage "
+                 "(plus lent, plusieurs minutes)...", "loading")
+    ok = subprocess.run(cmd).returncode == 0 and _finish(tmp, out_path)
+    if not ok:
+        _cleanup(tmp)
+    return ok
+
+
 def merge_parts(paths, out_path):
-    """Concatenate parts (same encoding, as served by one server) into one
-    .mp4 without re-encoding. Parts encoded differently (e.g. one came from
-    a fallback server) can't be joined losslessly: returns False and the
-    caller keeps them as pt1/pt2..., which Plex stacks anyway."""
+    """Join the parts into one .mp4: a lossless copy when they share the
+    same encoding (one server), otherwise (or if the copy fails) a
+    re-encode, so the result is always a single file."""
     signatures = [_stream_signature(p) for p in paths]
     if None not in signatures and any(sig != signatures[0] for sig in signatures):
-        print_status("Les parties n'ont pas le même encodage (serveurs différents) : fusion impossible sans ré-encodage.", "warning")
-        return False
+        return _merge_reencode(paths, out_path)
     list_path = out_path + ".txt"
     with open(list_path, "w", encoding="utf-8") as f:
         for p in paths:
@@ -158,6 +213,7 @@ def merge_parts(paths, out_path):
         _cleanup(list_path)
     if not ok:
         _cleanup(tmp)
+        return _merge_reencode(paths, out_path)
     return ok
 
 

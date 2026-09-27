@@ -44,7 +44,7 @@ from src.utils.config.config import get_setting, set_setting
 from src.utils.check.check_ffmpeg_installed import check_ffmpeg_installed
 from src.nba.site import Site
 from src.nba.plex import plex_target
-from src.nba.downloader import download_part, merge_parts, ffmpeg_hint, configure, SETTINGS
+from src.nba.downloader import download_part, merge_parts, ffmpeg_hint, ffmpeg_install_command, configure, SETTINGS
 
 FALLBACK_DEFAULT_DIR = os.path.join(os.path.expanduser("~"), "Videos", "NBA")
 
@@ -227,12 +227,11 @@ def process_game(site, url, cli_dest):
 
     folder, stem = plex_target(game, dest, title=section)
     single = len(server.parts) == 1
-    merge = False
-    if len(picked) > 1:
-        if check_ffmpeg_installed():
-            merge = yes("Fusionner les parties en un seul fichier (recommandé pour Plex) ?", default=True)
-        else:
-            print_status("ffmpeg absent : les parties seront gardées séparément (pt1, pt2... que Plex regroupe).", "info")
+    # Several parts are always joined into one file once all are downloaded.
+    merge = len(picked) > 1
+    if merge and not check_ffmpeg_installed():
+        print_status(f"ffmpeg est nécessaire pour fusionner les parties : {ffmpeg_install_command()}. "
+                     "En attendant, elles seront gardées séparément (pt1, pt2...).", "warning")
 
     final_path = os.path.join(folder, stem + ".mp4")
     if merge and os.path.exists(final_path):
@@ -262,7 +261,7 @@ def process_game(site, url, cli_dest):
             failed += 1
             print_status(f"Impossible de télécharger {part.label}.", "error")
 
-    if merge and not failed:
+    if merge and not failed and check_ffmpeg_installed():
         if merge_parts(done, final_path):
             for p in done:
                 try:
@@ -273,8 +272,9 @@ def process_game(site, url, cli_dest):
             print_status(f"Match complet : {final_path}", "success")
         else:
             print_status("La fusion a échoué : les parties sont gardées séparément (Plex les regroupe).", "warning")
-    elif merge:
-        print_status("Toutes les parties n'ont pas été téléchargées : pas de fusion.", "warning")
+    elif merge and failed:
+        print_status("Toutes les parties n'ont pas été téléchargées : pas de fusion. Relancez le même match : "
+                     "les parties déjà là sont gardées, puis tout est fusionné.", "warning")
 
     print_separator(title="RÉSUMÉ")
     for p in done:
@@ -294,7 +294,7 @@ def main():
     parser.add_argument("--quality", choices=["480", "720", "1080", "1440", "2160", "best"],
                         help="Qualité max (défaut 1080, mémorisée). 'best' = la plus haute, souvent ~20 Go par match")
     parser.add_argument("--threads", type=int, metavar="N",
-                        help="Morceaux téléchargés en parallèle (défaut 16, mémorisé). Plus = plus rapide, jusqu'à la limite de votre connexion")
+                        help="Morceaux téléchargés en parallèle (défaut 32, mémorisé). Plus = plus rapide, jusqu'à la limite de votre connexion")
     parser.add_argument("--debug", action="store_true", help="Enregistre les pages HTML dans ./debug et affiche les lecteurs détectés")
     args = parser.parse_args()
 
@@ -313,7 +313,7 @@ def main():
         set_setting("nba_threads", args.threads)
     quality = str(get_setting("nba_quality") or "1080")
     configure(max_height=None if quality == "best" else int(quality),
-              threads=get_setting("nba_threads") or 16)
+              threads=get_setting("nba_threads") or 32)
 
     site = Site(debug=args.debug)
     banner(site)
