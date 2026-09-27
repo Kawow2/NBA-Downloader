@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 from src.var import Colors, DEFAULT_USER_AGENT, print_status
 from src.utils.check.check_ffmpeg_installed import check_ffmpeg_installed
 from src.utils.download.verify_video_file import verify_video_file
+from src.nba import fast_http
 from src.nba.hosts import builtin_stream, has_builtin, patch_ytdlp
 from src.utils.mp4_faststart import ensure_faststart
 from src.utils.ffmpeg_progress import run_ffmpeg, media_duration
@@ -29,7 +30,10 @@ from src.utils.ffmpeg_progress import run_ffmpeg, media_duration
 # OK.ru throttles each connection, so throughput comes from fetching many
 # HLS fragments at once; and a 1080p cap keeps a game at a few GB instead
 # of ~20 GB in the host's top (1440p/4K) quality.
-SETTINGS = {"max_height": 1080, "threads": 32}
+SETTINGS = {"max_height": 1080, "threads": 32,
+            # False while downloading parts that get merged: the merge writes
+            # the final file faststart anyway, no need to rewrite each part.
+            "faststart": True}
 
 
 def configure(max_height=None, threads=None):
@@ -81,7 +85,8 @@ def _finish(tmp_path, out_path):
         _cleanup(tmp_path)
         return False
     os.replace(tmp_path, out_path)
-    ensure_faststart(out_path)  # host files that never went through ffmpeg
+    if SETTINGS["faststart"]:
+        ensure_faststart(out_path)  # host files that never went through ffmpeg
     return True
 
 
@@ -299,6 +304,58 @@ def _ytdlp_postprocessing(d):
         print_status(f"Finalisation : {step}...", "loading")
 
 
+def _download_direct_formats(ydl, info, base):
+    """When yt-dlp picked direct files (plain https, e.g. OK.ru's .mp4)
+    rather than HLS fragments, it would fetch each over one connection -
+    capped by the host at ~6-7 MiB/s. Fetch them over many connections
+    instead (fast_http). Returns the downloaded file, or None to let yt-dlp
+    download the usual way."""
+    formats = (info or {}).get("requested_formats") or [info or {}]
+    if not formats or any(f.get("protocol") not in ("http", "https") or not f.get("url") for f in formats):
+        if formats and formats[0].get("protocol"):
+            print_status(f"Flux {formats[0]['protocol']} : {SETTINGS['threads']} morceaux téléchargés "
+                         "en parallèle", "info")
+        return None
+    if len(formats) > 1 and not check_ffmpeg_installed():
+        return None
+    files = []
+    for f in formats:
+        headers = dict(f.get("http_headers") or {})
+        try:
+            cookies = ydl.cookiejar.get_cookie_header(f["url"])
+        except Exception:
+            cookies = None
+        if cookies:
+            headers["Cookie"] = cookies
+        path = f"{base}.f{re.sub(r'[^A-Za-z0-9_-]', '_', str(f.get('format_id')))}.{f.get('ext') or 'mp4'}"
+        kind = "vidéo" if f.get("vcodec") not in (None, "none") and len(formats) > 1 else \
+               "son" if len(formats) > 1 else "vidéo"
+        if not fast_http.download(f["url"], path, headers, SETTINGS["threads"], label=f"📥 {kind}"):
+            _cleanup(*files)
+            return None
+        files.append(path)
+    if len(files) == 1:
+        return files[0]
+    merged = base + ".merged.mp4"
+    args = []
+    for p in files:
+        args += ["-i", p]
+    args += ["-map", "0:v:0", "-map", "1:a:0", "-c", "copy", "-movflags", "+faststart", "-f", "mp4", merged]
+    ok = run_ffmpeg(args, "🔗 Fusion image + son", media_duration(files[0]))
+    _cleanup(*files)
+    return merged if ok else None
+
+
+def _download_direct_file(url, out_path, page_url=None):
+    tmp = out_path + ".part"
+    headers = {"User-Agent": DEFAULT_USER_AGENT}
+    if page_url:
+        headers.update({"Referer": page_url, "Origin": _origin(page_url)})
+    if not fast_http.download(url, tmp, headers, SETTINGS["threads"]):
+        return False
+    return _finish(tmp, out_path)
+
+
 def _download_with_ytdlp(embed_url, out_path, page_url, origin=None):
     try:
         import yt_dlp
@@ -335,6 +392,12 @@ def _download_with_ytdlp(embed_url, out_path, page_url, origin=None):
     info, error = None, None
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(embed_url, download=False)
+            fast = _download_direct_formats(ydl, info, base)
+            if fast:
+                if fast.lower().endswith(".mp4"):
+                    return _finish(fast, out_path)
+                return ffmpeg_remux(fast, out_path)
             info = ydl.extract_info(embed_url, download=True)
     except Exception as e:
         error = str(e).splitlines()[0][:200]
@@ -408,6 +471,8 @@ def download_part(embed_url, out_path, page_url=None):
     if path.endswith((".m3u8", ".mp4")) and check_ffmpeg_installed():
         # A raw stream/file link: nothing to extract.
         methods.insert(0, ("ffmpeg", lambda: ffmpeg_copy(embed_url, out_path, referer=page_url)))
+    if path.endswith(".mp4"):
+        methods.insert(0, ("multi-connexions", lambda: _download_direct_file(embed_url, out_path, page_url)))
     for name, run in methods:
         try:
             if run():

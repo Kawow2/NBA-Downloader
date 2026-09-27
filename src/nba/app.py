@@ -19,6 +19,7 @@ from src.nba.site import Site, parse_date
 from src.nba.plex import plex_target
 from src.nba.downloader import (download_part, merge_parts, ffmpeg_hint, ffmpeg_install_command, configure,
                                 SETTINGS, temp_files)
+from src.utils.mp4_faststart import ensure_faststart
 
 FALLBACK_DEFAULT_DIR = os.path.join(os.path.expanduser("~"), "Videos", "NBA")
 
@@ -247,6 +248,7 @@ def process_game(site, url, cli_dest, listed=None):
         return
 
     done, failed = [], 0
+    SETTINGS["faststart"] = not (merge and check_ffmpeg_installed())
     for n, idx in enumerate(picked, 1):
         part = server.parts[idx]
         out = final_path if single else os.path.join(folder, f"{stem} - pt{idx + 1}.mp4")
@@ -269,6 +271,10 @@ def process_game(site, url, cli_dest, listed=None):
             failed += 1
             print_status(f"Impossible de télécharger {part.label}.", "error")
 
+    SETTINGS["faststart"] = True
+    if merge and failed:
+        for p in done:
+            ensure_faststart(p)  # kept separately for now: Plex-ready as they are
     if merge and not failed and check_ffmpeg_installed():
         if merge_parts(done, final_path):
             for p in done:
@@ -280,6 +286,8 @@ def process_game(site, url, cli_dest, listed=None):
             print_status(f"Match complet : {final_path}", "success")
         else:
             print_status("La fusion a échoué : les parties sont gardées séparément (Plex les regroupe).", "warning")
+            for p in done:
+                ensure_faststart(p)
     elif merge and failed:
         print_status("Toutes les parties n'ont pas été téléchargées : pas de fusion. Relancez le même match : "
                      "les parties déjà là sont gardées, puis tout est fusionné.", "warning")

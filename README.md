@@ -134,7 +134,7 @@ Créez une bibliothèque Plex de type **Séries TV** sur le dossier qui **contie
 | `--dest <chemin>` | dossier de destination sans poser la question |
 | `--site <URL>` | si le site change de domaine (mémorisé) |
 | `--quality 720\|1080\|1440\|2160\|best` | qualité max (défaut 1080p, mémorisée) ; `best` ≈ 20 Go par match chez OK.ru |
-| `--threads <N>` | morceaux téléchargés en parallèle (défaut 32, mémorisé) ; à augmenter sur une connexion rapide |
+| `--threads <N>` | morceaux téléchargés en parallèle (défaut 32, mémorisé) ; pour un fichier direct (.mp4, ex. OK.ru), nombre de connexions simultanées (16 max) |
 | `--debug` | enregistre les pages dans `./debug` et affiche les lecteurs détectés |
 
 Si aucun lecteur n'est détecté sur une page (changement de mise en page du site), relancez avec `--debug` : les pages HTML sauvegardées dans `./debug` permettent d'adapter `src/nba/site.py`.
