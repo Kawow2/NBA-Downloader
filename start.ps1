@@ -1,8 +1,8 @@
-﻿# NBA Replay Downloader - lance main.py dans un environnement virtuel (.venv)
+﻿# Anime & NBA Downloader - lance main.py dans un environnement virtuel (.venv)
 #
 # Dans PowerShell, depuis le dossier du projet :
 #     .\start.ps1
-#     .\start.ps1 --url "https://basketball-video.com/..."
+#     .\start.ps1 nba --url "https://basketball-video.com/..."
 # Si Windows bloque le script : Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 #
 # Équivalent manuel :
@@ -11,11 +11,13 @@
 #     pip install -r requirements.txt
 #     python main.py
 
-# Chemin proposé par défaut à la question "Chemin" (Entrée = ce chemin).
-# Mettez-y le dossier de la série "NBA" de votre bibliothèque Plex, ex :
-#   $CheminParDefaut = "D:\Plex\Sports\NBA"
-# Laissé vide : chemin enregistré dans le programme, sinon %USERPROFILE%\Videos\NBA.
-$CheminParDefaut = ""
+# Dossiers (bibliothèques Plex) pour ce lanceur, ex :
+#   $CheminAnime = "D:\Plex\Anime"
+#   $CheminNBA   = "D:\Plex\Sports\NBA"
+# Laissés vides : les dossiers choisis dans le menu du programme (Réglages),
+# demandés la première fois que chaque catégorie est utilisée.
+$CheminAnime = ""
+$CheminNBA = ""
 
 # "Continue" : sous Windows PowerShell 5.1, "Stop" transforme la moindre
 # sortie d'erreur de python en exception.
@@ -50,7 +52,7 @@ if (-not (Test-Path $venvPython)) {
 }
 
 # Dépendances (installées dans .venv, une seule fois)
-& $venvPython -c "import requests, bs4, tqdm, yt_dlp, curl_cffi" 2>$null
+& $venvPython -c "import requests, bs4, tqdm, yt_dlp, curl_cffi, av, Crypto, cloudscraper" 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Installation des dépendances dans .venv..." -ForegroundColor Cyan
     & $venvPython -m pip install --upgrade pip
@@ -61,9 +63,9 @@ if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
     Write-Host "ffmpeg introuvable (fortement conseillé) : winget install Gyan.FFmpeg" -ForegroundColor Yellow
 }
 
-$mainArgs = @($args)
-if ($CheminParDefaut) {
-    $mainArgs += @("--default-dir", $CheminParDefaut)
-}
+$mainArgs = @()
+if ($CheminAnime) { $mainArgs += @("--anime-dir", $CheminAnime) }
+if ($CheminNBA) { $mainArgs += @("--nba-dir", $CheminNBA) }
+$mainArgs += @($args)
 
 & $venvPython main.py @mainArgs

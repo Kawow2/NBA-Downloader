@@ -45,6 +45,9 @@ def find_existing_season_dir(anime_dir, saison_info):
 
 def format_save_path(anime_name, saison_info, base_path=None):
     template = get_setting("save_template", "./videos/{anime}/{season}")
+    # Anime folder chosen in the Anime/NBA menu (src/launcher.py):
+    # "<folder>/<anime>/<season>", like --dest.
+    base_path = base_path or os.environ.get("ANIME_DEFAULT_DIR")
 
     fmt_args = {
         "anime": anime_name if anime_name else "Unknown_Anime",

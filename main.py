@@ -1,409 +1,806 @@
-"""NBA replay downloader for basketball-video.com (Plex-ready .mp4 files).
+# --- NBA-Downloader: Anime / NBA menu (src/launcher.py). Choosing NBA runs
+# the NBA downloader and exits; choosing Anime continues with the anime
+# downloader below (SertraFurr/anime-sama-nakanime-downloader, kept as close
+# to upstream as possible so its updates keep merging cleanly).
+from src.launcher import launch
+launch()
+# ---
 
-    python main.py                       menu interactif
-    python main.py --url <page du match> directement un match
-    python main.py --set-default-dir "D:\\Plex\\NBA"   chemin par défaut mémorisé
-    python main.py --debug               enregistre les pages dans ./debug et
-                                        affiche les lecteurs détectés
-"""
-import argparse
+from src.utils.config.config import get_cookies, set_cookies, check_cookies
+from src.utils.print.print_status import print_status
+from src.var import Colors, get_domain, print_header, print_separator, print_tutorial, generate_requests_headers, SourceDomains
+from src.utils.check.is_cloudflare_here import check_if_cloudflare_enabled
+
+def tutorial_input():
+    print_status("No valid Cloudflare cookies found. Let's set them up!", "info")
+    print_status(f"1. Open {get_domain()} in your browser.", "info")
+    print_status("2. Press F12 to open Developer Tools.", "info")
+    print_status(f"3. Go to the 'Application' tab → Cookies → select {get_domain()}.", "info")
+    print_status("4. Copy the value of the 'cf_clearance' cookie.", "info")
+    cf_clearance = input("Paste the cf_clearance value here: ").strip()
+
+    print_status("5. In DevTools Console (F12 → Console), run:", "info")
+    print_status("   navigator.userAgent", "info")
+    print_status("6. Copy the User-Agent string printed in console WITHOUT the ' .", "info")
+    user_agent = input("Paste the User-Agent here: ").strip()
+
+    return cf_clearance, user_agent
+
+print("Checking if cloudflare is enabled..")
+cloudflare = check_if_cloudflare_enabled(domain=get_domain(), headers={"User-Agent": "Mozilla/5.0"})
+
+if cloudflare:
+    print("Cloudflare is enabled, either wait (Unknown time) or follow this:")
+    cookies_info = get_cookies()
+    if cookies_info is False:
+        cf_clearance, user_agent = tutorial_input()
+        set_cookies(cf_clearance, user_agent)
+    cf_clearance, headers = get_cookies()
+    request_headers = {"User-Agent": headers.get("User-Agent")}
+
+    while not check_cookies(domain=get_domain(), headers=request_headers):
+        print_status("Please update your Cloudflare cookies or use the same User-Agent as before.", "error")
+        cf_clearance, user_agent = tutorial_input()
+        set_cookies(cf_clearance, user_agent)
+
+    user_agent = headers.get("User-Agent")
+    headers = generate_requests_headers(cf_clearance, user_agent)
+else:
+    headers = generate_requests_headers("None", "Mozilla/5.0")
+
 import os
 import re
 import sys
+import argparse
+from concurrent.futures                         import ThreadPoolExecutor, as_completed
+from src.utils.fetch.fetch_episodes             import fetch_episodes, fetch_nakanime_episode_count, fetch_nakanime_available_count
+from src.utils.fetch.fetch_video_source         import fetch_video_source
+from src.utils.get.get_player_choice            import get_player_choice, is_fast_player
+from src.utils.get.get_episode_choice           import get_episode_choice
+from src.utils.check.check_package              import check_package
+from src.utils.check.check_ffmpeg_installed     import check_ffmpeg_installed
+from src.utils.validate_anime_sama_url          import validate_anime_sama_url
+from src.utils.extract.extract_anime_name       import extract_anime_name
+from src.utils.get.get_save_directory           import get_save_directory, format_save_path
+from src.utils.download.download_episode        import download_episode, create_match_file, convert_episode_ts_to_mp4
+from src.utils.fetch.fetch_alt_titles           import fetch_alt_titles
+from src.utils.download.download_episode_with_fallback import download_episode_with_fallback
+from src.utils.search.search_anime              import search_anime
+from src.utils.search.expand_catalogue          import expand_catalogue_url
+from src.utils.download.download_scan           import download_scan
+from src.utils.settings.settings_menu           import settings_menu
 
-if os.name == "nt":
-    os.system("")  # enables ANSI colours in the Windows console
+# PLEASE DO NOT REMOVE: Original code from https://github.com/sertrafurr/Anime-Sama-Downloader
 
+def parse_selection_indices(user_input, count):
+    """Parse a 1-based selection string (comma list, ranges like 12-49, or 'all') into 0-based indices."""
+    user_input = user_input.strip().lower()
+    if not user_input:
+        return []
 
-def ensure_requirements():
-    """Install requirements.txt into the running Python (the venv when
-    launched by start.ps1) if a module is missing, e.g. yt-dlp after an
-    update added it."""
-    import importlib.util
-    # curl_cffi: lets yt-dlp impersonate a browser (required by Dailymotion)
-    modules = ("requests", "bs4", "tqdm", "yt_dlp", "curl_cffi", "Crypto", "av", "cloudscraper")
-    missing = [m for m in modules if importlib.util.find_spec(m) is None]
-    if not missing:
-        return
-    import subprocess
-    print(f"Modules manquants : {', '.join(missing)} — installation dans {sys.executable} ...")
-    req = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
-    subprocess.call([sys.executable, "-m", "pip", "install", "-r", req])
-    importlib.invalidate_caches()
-    still = [m for m in modules if importlib.util.find_spec(m) is None]
-    if still:
-        print(f"Toujours manquants : {', '.join(still)}. Lancez : \"{sys.executable}\" -m pip install -r requirements.txt")
-        if any(m in still for m in ("requests", "bs4", "tqdm")):
-            sys.exit(1)
-
-
-ensure_requirements()
-
-from src.var import Colors, print_status, print_separator
-from src.utils.config.config import get_setting, set_setting
-from src.utils.check.check_ffmpeg_installed import check_ffmpeg_installed
-from src.nba.site import Site, parse_date
-from src.nba.plex import plex_target
-from src.nba.downloader import (download_part, merge_parts, ffmpeg_hint, ffmpeg_install_command, configure,
-                                SETTINGS, temp_files)
-
-FALLBACK_DEFAULT_DIR = os.path.join(os.path.expanduser("~"), "Videos", "NBA")
-
-
-def banner(site):
-    w = 62
-    print(f"\n{Colors.HEADER}{Colors.BOLD}╔{'═' * w}╗\n║{'NBA  REPLAY  DOWNLOADER'.center(w)}║\n╚{'═' * w}╝{Colors.ENDC}")
-    print(f"  {Colors.DIM}Source : {site.base}   →   .mp4 prêts pour Plex{Colors.ENDC}\n")
-
-
-def ask(prompt):
-    try:
-        return input(f"{Colors.BOLD}{prompt}{Colors.ENDC}").strip()
-    except EOFError:
-        return ""
-
-
-def yes(prompt, default=True):
-    suffix = " (O/n) : " if default else " (o/N) : "
-    ans = ask(prompt + suffix).lower()
-    if not ans:
-        return default
-    return ans in ("o", "oui", "y", "yes", "1")
-
-
-_default_dir_override = None
-
-
-def default_dir():
-    return _default_dir_override or get_setting("nba_default_dir") or FALLBACK_DEFAULT_DIR
-
-
-def print_games(games):
-    print_separator(title="MATCHS")
-    for i, g in enumerate(games, 1):
-        d = f"{Colors.OKCYAN}{g.date.strftime('%d/%m/%Y')}{Colors.ENDC}  " if g.date else ""
-        print(f"  {Colors.BOLD}{i:>2}.{Colors.ENDC} {d}{g.title}")
-    print_separator()
-
-
-def choose_game(site):
-    while True:
-        print(f"{Colors.BOLD}Que voulez-vous faire ?{Colors.ENDC}")
-        print("  1. Afficher les 10 derniers matchs du site")
-        print("  2. Rechercher un match")
-        print(f"  {Colors.DIM}(ou collez directement l'URL d'un match — q pour quitter){Colors.ENDC}")
-        choice = ask("Choix : ")
-        if choice.lower() in ("q", "quit", "exit"):
-            return None, None
-        if choice.startswith("http"):
-            return choice, None
-        if choice == "1":
-            print_status("Récupération des derniers matchs...", "loading")
-            games = site.latest_games(10)
-        elif choice == "2":
-            query = ask("Recherche (ex : Knicks Spurs, Lakers, Finals Game 5) : ")
-            if not query:
-                continue
-            print_status(f"Recherche de « {query} »...", "loading")
-            games = site.search(query, 10)
-        else:
-            print_status("Tapez 1 ou 2.", "error")
-            continue
-
-        if not games:
-            print_status("Aucun match trouvé.", "error")
-            continue
-        print_games(games)
-        while True:
-            pick = ask(f"Numéro du match (1-{len(games)}, Entrée = retour) : ")
-            if not pick:
-                break
-            if pick.isdigit() and 1 <= int(pick) <= len(games):
-                return games[int(pick) - 1].url, games[int(pick) - 1]
-            print_status("Numéro invalide.", "error")
-
-
-def choose_section(servers):
-    """A page can hold several games (e.g. "USA vs France - FINAL" and
-    "Spain vs Germany - 3rd Place"): pick one first."""
-    sections = list(dict.fromkeys(s.section for s in servers if s.section))
-    if len(sections) < 2:
-        return None, servers
-    print_separator(title="MATCHS SUR CETTE PAGE")
-    for i, sec in enumerate(sections, 1):
-        print(f"  {Colors.BOLD}{i:>2}.{Colors.ENDC} {sec}")
-    print_separator()
-    while True:
-        pick = ask(f"Choisir le match (1-{len(sections)}, Entrée = 1) : ") or "1"
-        if pick.isdigit() and 1 <= int(pick) <= len(sections):
-            chosen = sections[int(pick) - 1]
-            return chosen, [s for s in servers if s.section == chosen]
-        print_status("Numéro invalide.", "error")
-
-
-def choose_server(servers):
-    print_separator(title="SERVEURS")
-    for i, s in enumerate(servers, 1):
-        host = f" {Colors.DIM}[{s.host}]{Colors.ENDC}" if s.host != s.name else ""
-        n = len(s.parts)
-        print(f"  {Colors.BOLD}{i:>2}.{Colors.ENDC} {s.name}{host} — {n} partie{'s' if n > 1 else ''}")
-    print_separator()
-    while True:
-        pick = ask(f"Choisir le serveur (1-{len(servers)}, Entrée = 1) : ") or "1"
-        if pick.isdigit() and 1 <= int(pick) <= len(servers):
-            return servers[int(pick) - 1]
-        print_status("Numéro invalide.", "error")
-
-
-def parse_parts(text, count):
-    text = text.strip().lower()
-    if text in ("", "all", "tout", "toutes", "*"):
+    if user_input == 'all':
         return list(range(count))
-    picked = []
-    # "1-2-3" means parts 1, 2 and 3 (not a range); "," ";" "+" and spaces work too.
-    for tok in re.split(r"[\s,;+\-/]+", text):
-        if tok.isdigit() and 1 <= int(tok) <= count and int(tok) - 1 not in picked:
-            picked.append(int(tok) - 1)
-    return picked
 
-
-def choose_parts(server):
-    print_separator(title=f"PARTIES — {server.name}")
-    for i, p in enumerate(server.parts, 1):
-        print(f"  {Colors.BOLD}{i:>2}.{Colors.ENDC} {p.label}")
-    print_separator()
-    while True:
-        picked = parse_parts(ask(f"Parties à télécharger (ex : 1-2-3, Entrée = toutes) : "), len(server.parts))
-        if picked:
-            return picked
-        print_status("Sélection invalide.", "error")
-
-
-def choose_dest(cli_dest):
-    if cli_dest:
-        return cli_dest
-    current = default_dir()
-    print(f"\n{Colors.BOLD}{Colors.HEADER}📁 DOSSIER DE DESTINATION{Colors.ENDC}")
-    typed = ask(f"Chemin (Entrée = {current}) : ").strip('"\'')
-    if not typed:
-        return current
-    typed = os.path.expanduser(typed)
-    if os.path.abspath(typed) != os.path.abspath(current) and yes("Utiliser ce chemin par défaut les prochaines fois ?", default=False):
-        set_setting("nba_default_dir", typed)
-        print_status(f"Chemin par défaut enregistré : {typed}", "success")
-    return typed
-
-
-def alternatives(servers, chosen, part_index):
-    """Same part on the other servers, used if the chosen one fails."""
-    part = chosen.parts[part_index]
-    alts = []
-    for s in servers:
-        if s is chosen:
+    indices = []
+    seen = set()
+    for part in user_input.split(','):
+        part = part.strip()
+        if not part:
             continue
-        same = [p for p in s.parts if p.number == part.number]
-        if same:
-            alts.append((s, same[0]))
-        elif len(s.parts) == len(chosen.parts):
-            alts.append((s, s.parts[part_index]))
-    return alts
-
-
-def file_name(game, dest, section, listed):
-    """Folder and file name for the game: the chosen game's heading on a
-    multi-game page, else the title shown in the search/latest list, else
-    the page title. When that doesn't identify a game (no date or no
-    "A vs B"), ask for a name, suggesting one."""
-    if listed and not game.date and listed.date:
-        game.date = listed.date
-    title = section or (listed.title if listed else None) or game.title
-    folder, stem = plex_target(game, dest, title=title)
-    if game.date and re.search(r"\bvs?\.?\s", title, re.IGNORECASE):
-        return folder, stem
-    print(f"\n{Colors.BOLD}{Colors.HEADER}📝 NOM DU FICHIER{Colors.ENDC}")
-    print(f"  {Colors.DIM}Proposé : {stem}.mp4{Colors.ENDC}")
-    typed = ask("Nom du match (Entrée = nom proposé, ex : Lakers vs Celtics - Game 7) : ")
-    if typed:
-        custom = type(game)(game.url, typed)
-        custom.date = parse_date(typed) or game.date
-        folder, stem = plex_target(custom, dest, title=typed)
-        if not custom.date:
-            day = ask("Date du match (AAAA-MM-JJ, Entrée = aucune) : ")
-            custom.date = parse_date(day)
-            folder, stem = plex_target(custom, dest, title=typed)
-    return folder, stem
-
-
-def process_game(site, url, cli_dest, listed=None):
-    print_status("Analyse de la page du match...", "loading")
-    game, servers = site.fetch_game(url)
-    if not game:
-        return
-    print(f"\n{Colors.BOLD}{Colors.OKGREEN}🏀 {game.title}{Colors.ENDC}"
-          + (f"  {Colors.OKCYAN}({game.date.strftime('%d/%m/%Y')}){Colors.ENDC}" if game.date else ""))
-    if not servers:
-        print_status("Aucun lecteur vidéo trouvé sur cette page.", "error")
-        print_status("Relancez avec --debug et envoyez le contenu du dossier ./debug pour adapter le parseur.", "info")
-        return
-
-    section, servers = choose_section(servers)
-    server = choose_server(servers)
-    picked = choose_parts(server)
-    dest = choose_dest(cli_dest)
-
-    folder, stem = file_name(game, dest, section, listed)
-    print_status(f"Fichier : {os.path.join(folder, stem)}.mp4", "info")
-    single = len(server.parts) == 1
-    # Several parts are always joined into one file once all are downloaded.
-    merge = len(picked) > 1
-    if merge and not check_ffmpeg_installed():
-        print_status(f"ffmpeg est nécessaire pour fusionner les parties : {ffmpeg_install_command()}. "
-                     "En attendant, elles seront gardées séparément (pt1, pt2...).", "warning")
-
-    final_path = os.path.join(folder, stem + ".mp4")
-    if merge and os.path.exists(final_path):
-        print_status(f"Déjà présent : {final_path}", "success")
-        return
-
-    done, failed = [], 0
-    for n, idx in enumerate(picked, 1):
-        part = server.parts[idx]
-        out = final_path if single else os.path.join(folder, f"{stem} - pt{idx + 1}.mp4")
-        print_separator(title=f"{part.label} ({n}/{len(picked)})")
-        if os.path.exists(out):
-            print_status(f"Déjà présent : {out}", "success")
-            done.append(out)
+        try:
+            if '-' in part:
+                start, end = map(int, part.split('-', 1))
+                nums = range(start, end + 1)
+            else:
+                nums = [int(part)]
+        except ValueError:
+            print_status(f"Invalid selection: '{part}'", "error")
             continue
-        ok = download_part(part.url, out, page_url=part.referer or game.url)
-        if not ok:
-            for alt_server, alt_part in alternatives(servers, server, idx):
-                print_status(f"Nouvel essai sur le serveur « {alt_server.name} »...", "warning")
-                if download_part(alt_part.url, out, page_url=alt_part.referer or game.url):
-                    ok = True
+
+        for num in nums:
+            if num in seen:
+                continue
+            seen.add(num)
+            if 1 <= num <= count:
+                indices.append(num - 1)
+            else:
+                print_status(f"Number {num} is out of range (1-{count})", "error")
+
+    return indices
+
+
+NAKANIME_FETCH_ALL_MAX = 45
+
+
+def plan_season(base_url, args, headers, interactive):
+    """Asks every interactive question for one season (player, episodes,
+    save path, threading/mp4 choices) and returns a plan dict ready for
+    execute_season_plan() - without downloading anything yet. Split out of
+    the old process_season() so a multi-season run can gather every
+    season's answers upfront, then run all the downloads back to back with
+    no further prompts. Returns None on failure/cancellation, or
+    {"already_done": True} for URLs handled synchronously (scans)."""
+    is_valid, error_msg = validate_anime_sama_url(base_url)
+    if not is_valid:
+        print_status(error_msg, "error")
+        return None
+
+    if "/scan" in base_url.lower():
+        download_scan(base_url, headers)
+        return {"already_done": True}
+
+    anime_name = extract_anime_name(base_url)
+    print_status(f"Detected anime: {anime_name}", "info")
+
+    # Nakanime fetch le cout reel un episode a la fois (rate-limite par le
+    # site au-dela de ~40-50 requetes/minute) - demander a l'utilisateur
+    # quels episodes il veut AVANT ce fetch (plutot qu'apres, comme pour
+    # anime-sama ou le cout est negligeable) evite de payer inutilement pour
+    # toute une saison quand il n'en veut qu'une poignee.
+    #
+    # Exception : une petite saison (<= NAKANIME_FETCH_ALL_MAX) choisie en
+    # interactif est recuperee en entier d'abord - la grille compacte
+    # (liste des lecteurs) montre alors les lecteurs dispo par episode, et on
+    # choisit ensuite. Sinon (grosse saison, --episodes, --latest) on ne
+    # propose que les episodes deja sortis (trouves par dichotomie).
+    wanted_episodes = None
+    if 'nakanime.tv' in base_url.lower():
+        nb_episodes = fetch_nakanime_episode_count(base_url, headers=headers)
+        if nb_episodes:
+            fetch_all_first = (
+                nb_episodes <= NAKANIME_FETCH_ALL_MAX
+                and interactive and not args.episodes and not args.latest
+            )
+            if not fetch_all_first:
+                available = fetch_nakanime_available_count(base_url, headers=headers)
+                if available:
+                    print_status(f"{nb_episodes} episodes listed, {available} available (1-{available})", "info")
+                    nb_episodes = available
+
+                selection_str = None
+                if args.latest:
+                    selection_str = str(nb_episodes)
+                elif args.episodes:
+                    selection_str = args.episodes
+                elif interactive:
+                    selection_str = input(
+                        f"{Colors.BOLD}This season has {nb_episodes} available episodes. "
+                        f"Which ones do you want (1-{nb_episodes}, comma-separated, ranges like 12-49, or 'all')? "
+                        f"{Colors.ENDC}"
+                    ).strip()
+                    args.episodes = selection_str
+
+                if selection_str:
+                    if selection_str.lower() == 'all':
+                        wanted_episodes = set(range(1, nb_episodes + 1))
+                    else:
+                        indices = parse_selection_indices(selection_str, nb_episodes)
+                        if indices:
+                            wanted_episodes = {i + 1 for i in indices}
+
+    episodes = fetch_episodes(base_url, headers=headers, wanted_episodes=wanted_episodes)
+    if not episodes:
+        print_status("Failed to fetch episodes.", "error")
+        return None
+
+    player_choice = None
+    if args.player:
+        avail = list(episodes.keys())
+        if args.player in avail:
+            player_choice = args.player
+        else:
+            for p in avail:
+                if args.player.lower() in p.lower():
+                    player_choice = p
                     break
-        if ok:
-            print_status(f"Enregistré : {out}", "success")
-            done.append(out)
+
+            if not player_choice:
+                target = args.player.lower()
+                domain_map = SourceDomains.DOMAIN_MAP
+
+                search_domains = []
+                if target in domain_map:
+                     val = domain_map[target]
+                     if isinstance(val, list): search_domains.extend(val)
+                     else: search_domains.append(val)
+                else:
+                    search_domains.append(target)
+
+                for p in avail:
+                    urls_to_check = [u for u in episodes[p][:5] if u]
+                    found_match = False
+                    for u in urls_to_check:
+                        u_lower = u.lower()
+                        if any(d in u_lower for d in search_domains):
+                            player_choice = p
+                            found_match = True
+                            break
+                    if found_match:
+                        break
+
+        if not player_choice:
+            print_status(f"Player '{args.player}' not found.", "error")
+            return None
+    else:
+        player_choice = get_player_choice(episodes, wanted_episodes=wanted_episodes)
+
+    if not player_choice:
+        return None
+
+    episode_indices = None
+
+    if args.latest:
+        if episodes and player_choice in episodes:
+            # Derniere entree avec une source (les episodes pas encore sortis
+            # restent None en fin de liste).
+            last = max((i for i, u in enumerate(episodes[player_choice]) if u), default=None)
+            if last is not None:
+                episode_indices = [last]
+                print_status(f"Latest episode selected: Episode {last + 1}", "info")
+            else:
+                print_status("No episodes found to select latest.", "error")
+                return None
         else:
-            failed += 1
-            print_status(f"Impossible de télécharger {part.label}.", "error")
+            return None
 
-    if merge and not failed and check_ffmpeg_installed():
-        if merge_parts(done, final_path):
-            for p in done:
-                try:
-                    os.remove(p)
-                except OSError:
-                    pass
-            done = [final_path]
-            print_status(f"Match complet : {final_path}", "success")
+    if not episode_indices:
+        if args.episodes:
+            if args.episodes.lower() == 'all':
+                episode_indices = []
+                for i in range(len(episodes[player_choice])):
+                    url = episodes[player_choice][i]
+                    if url and 'vk.com' not in url and 'myvi.tv' not in url:
+                        episode_indices.append(i)
+            else:
+                # parse_selection_indices supporte deja les plages (12-49) et
+                # les listes separees par virgules - l'ancien parsing local
+                # ici ne gerait que les virgules et plantait ("Invalid
+                # episode list format") des qu'un tiret apparaissait, y
+                # compris pour la selection faite juste avant le fetch.
+                episode_indices = parse_selection_indices(args.episodes, len(episodes[player_choice]))
+                if not episode_indices:
+                    print_status("Invalid episode list format", "error")
+                    return None
         else:
-            print_status("La fusion a échoué : les parties sont gardées séparément (Plex les regroupe).", "warning")
-    elif merge and failed:
-        print_status("Toutes les parties n'ont pas été téléchargées : pas de fusion. Relancez le même match : "
-                     "les parties déjà là sont gardées, puis tout est fusionné.", "warning")
+             if not args.latest:
+                episode_indices = get_episode_choice(episodes, player_choice)
 
-    print_separator(title="RÉSUMÉ")
-    for p in done:
-        print(f"  {Colors.OKGREEN}✔{Colors.ENDC} {p}")
-    if failed:
-        print(f"  {Colors.FAIL}✘ {failed} partie(s) en échec{Colors.ENDC}")
-    clean_temp_files(folder, stem, keep_own=bool(failed))
+    if episode_indices is None or not episode_indices:
+        return None
+
+    get_anime_name = extract_anime_name(base_url)
+    if 'nakanime.tv' in base_url.lower() or 'nakanime.fr' in base_url.lower():
+        m_season = re.search(r'/season/(\d+)', base_url)
+        get_saison_info = f"saison{m_season.group(1)}" if m_season else "saison1"
+    else:
+        get_saison_info = base_url.split('/')[-3]
 
 
-def clean_temp_files(folder, stem, keep_own=False):
-    """Delete the game's .part/.ytdl leftovers once it is complete (they
-    are kept while it isn't: they let the next run resume), then offer to
-    delete leftovers of older, interrupted downloads in the same folder."""
-    if not os.path.isdir(folder):
-        return
-    if not keep_own:
-        for p in temp_files(folder, stem):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
-    others = [p for p in temp_files(folder) if keep_own is False or not os.path.basename(p).startswith(stem)]
-    if not others:
-        return
-    size = sum(os.path.getsize(p) for p in others if os.path.exists(p)) / 1024 ** 3
-    print_status(f"{len(others)} fichier(s) temporaire(s) d'anciens téléchargements interrompus ({size:.1f} Go) "
-                 f"dans {folder}.", "info")
-    if yes("Les supprimer ? (on ne pourra plus reprendre ces téléchargements)", default=True):
-        removed = 0
-        for p in others:
-            try:
-                os.remove(p)
-                removed += 1
-            except OSError:
-                pass
-        print_status(f"{removed} fichier(s) supprimé(s).", "success")
+    if args.dest:
+         save_dir = format_save_path(get_anime_name, get_saison_info, base_path=args.dest)
+    elif interactive:
+        save_dir = get_save_directory(get_anime_name, get_saison_info)
+    else:
+        save_dir = format_save_path(get_anime_name, get_saison_info)
+
+    if isinstance(episode_indices, int):
+        episode_indices = [episode_indices]
+
+    # Un index peut valoir None si le fetch de cet episode a echoue plus tot
+    # (ex: source Nakanime indisponible) - on l'ignore au lieu de planter ou
+    # de decaler les episodes suivants.
+    filtered_indices = []
+    for index in episode_indices:
+        if episodes[player_choice][index] is None:
+            print_status(f"Episode {index + 1} unavailable for this player, skipping.", "error")
+        else:
+            filtered_indices.append(index)
+    episode_indices = filtered_indices
+
+    if not episode_indices:
+        print_status("No available episodes to download for this player.", "error")
+        return None
+
+    urls = [episodes[player_choice][index] for index in episode_indices]
+    episode_numbers = [index + 1 for index in episode_indices]
+    def _player_lang(player_key):
+        m = re.search(r'\(([^)]+)\)\s*$', player_key)
+        return m.group(1).strip().upper() if m else None
+
+    # Quand le lecteur choisi echoue pour un episode, on prefere retomber sur
+    # un autre lecteur "rapide" (HLS/m3u8, multi-thread) avant les lecteurs
+    # a fichier unique (Sibnet, Sendvid) - sinon un fallback silencieux vers
+    # Sibnet fait perdre tout le gain de vitesse du choix initial.
+    def _speed_sort_key(p):
+        return 0 if is_fast_player(p, episodes.get(p)) else 1
+
+    chosen_lang = _player_lang(player_choice)
+    other_players = [p for p in episodes.keys() if p != player_choice]
+    if chosen_lang:
+        same_lang = sorted([p for p in other_players if _player_lang(p) == chosen_lang], key=_speed_sort_key)
+        other_lang = sorted([p for p in other_players if _player_lang(p) != chosen_lang], key=_speed_sort_key)
+        player_order = [player_choice] + same_lang + other_lang
+    else:
+        player_order = [player_choice] + sorted(other_players, key=_speed_sort_key)
+
+    # get_saison_info is "saisonN" (or nakanime's "saisonN") - pull N out so
+    # both the MAL search and the SxxExx episode filenames are season-aware
+    # instead of always assuming season 1.
+    m_season_num = re.search(r'\d+', get_saison_info or "")
+    season_number = int(m_season_num.group()) if m_season_num else None
+
+    if not args.no_mal and get_anime_name:
+        alt_names = fetch_alt_titles(base_url, headers=headers)
+        # May rename save_dir (tvdb/imdb identification mode tags the folder
+        # name) - every download below must use the returned path.
+        save_dir = create_match_file(save_dir, get_anime_name, interactive=interactive, alt_names=alt_names, season_number=season_number, write=False)
+
+    print(f"\n{Colors.BOLD}{Colors.HEADER}🎬 PROCESSING EPISODES{Colors.ENDC}")
+    print_separator()
+    print_status(f"Player: {player_choice}", "info")
+    print_status(f"Episodes selected: {', '.join(map(str, episode_numbers))}", "info")
+
+    video_sources = fetch_video_source(urls)
+    if not video_sources:
+        print_status("Could not extract video sources", "error")
+        return None
+
+    if isinstance(video_sources, str):
+        video_sources = [video_sources]
+
+    # Parallel downloads by default (NBA-Downloader; tuned in the Anime/NBA
+    # menu's settings, src/utils/download/parallel_settings.py).
+    from src.utils.download import parallel_settings
+    use_threading = args.threads or parallel_settings.parallel_episodes() > 1
+    use_ts_threading = args.fast or parallel_settings.segment_threads() > 1
+    automatic_mp4 = args.mp4
+    pre_selected_tool = args.tool
+
+    if interactive:
+        if len(episode_indices) > 1 and not use_threading:
+            thread_choice = input(f"{Colors.BOLD}Download all episodes simultaneously? (t/1/y = yes / s = no): {Colors.ENDC}").strip().lower()
+            use_threading = thread_choice in ['t', 'threaded', '1', 'y', 'yes']
+
+        # Only checking the chosen player's own video_sources misses the case
+        # where it fails per-episode and download_episode_with_fallback()
+        # switches to a different (segmented/m3u8) player - the ts-threading
+        # and mp4-conversion questions would then silently never get asked,
+        # even though the fallback player ends up needing them.
+        any_fallback_is_fast = any(is_fast_player(p, episodes.get(p)) for p in player_order)
+        if any_fallback_is_fast or any('m3u8' in src for src in video_sources if src):
+            if use_threading:
+                print_status("Using threading with M3U8.", "warning")
+
+            if not use_ts_threading:
+                 ts_thread_choice = input(f"{Colors.BOLD}Download .ts files simultaneously (fast)? (y/n): {Colors.ENDC}").strip().lower()
+                 use_ts_threading = ts_thread_choice in ['t', 'threaded', '1', 'y', 'yes']
+
+            if not args.mp4:
+                auto_mp4_choice = input(f"{Colors.BOLD}Convert to .mp4 automatically? (y/n): {Colors.ENDC}").strip().lower()
+                automatic_mp4 = auto_mp4_choice in ['t', 'threaded', '1', 'y', 'yes']
+
+                if automatic_mp4:
+                    if not pre_selected_tool:
+                         while True:
+                            t = input(f"{Colors.BOLD}Tool (1=av, 2=ffmpeg): {Colors.ENDC}").strip()
+                            if t in ['1', 'av', '']:
+                                pre_selected_tool = 'av'
+                                break
+                            elif t in ['2', 'ffmpeg']:
+                                pre_selected_tool = 'ffmpeg'
+                                break
+
+    return {
+        "episodes": episodes,
+        "player_choice": player_choice,
+        "episode_indices": episode_indices,
+        "urls": urls,
+        "episode_numbers": episode_numbers,
+        "player_order": player_order,
+        "get_anime_name": get_anime_name,
+        "save_dir": save_dir,
+        "video_sources": video_sources,
+        "use_threading": use_threading,
+        "use_ts_threading": use_ts_threading,
+        "automatic_mp4": automatic_mp4,
+        "pre_selected_tool": pre_selected_tool,
+        "season_number": season_number,
+        "args": args,
+        "interactive": interactive,
+    }
+
+
+def execute_season_plan(plan, pause_at_end=True):
+    """Runs the actual downloads for one season, given a plan already built
+    by plan_season() - no interactive questions from here on."""
+    episodes = plan["episodes"]
+    player_choice = plan["player_choice"]
+    episode_indices = plan["episode_indices"]
+    urls = plan["urls"]
+    episode_numbers = plan["episode_numbers"]
+    player_order = plan["player_order"]
+    get_anime_name = plan["get_anime_name"]
+    save_dir = plan["save_dir"]
+    video_sources = plan["video_sources"]
+    use_threading = plan["use_threading"]
+    use_ts_threading = plan["use_ts_threading"]
+    automatic_mp4 = plan["automatic_mp4"]
+    pre_selected_tool = plan["pre_selected_tool"]
+    season_number = plan["season_number"]
+    args = plan["args"]
+    interactive = plan["interactive"]
+
+    failed_downloads = 0
+    try:
+        if use_threading and len(episode_indices) > 1:
+            print_status("Starting threaded downloads...", "info")
+            from src.utils.download.download_video import set_batch_size
+            set_batch_size(len(episode_indices))
+            # Once inside a threaded batch, no per-episode question should
+            # ever hit the terminal again - the batch-level choices already
+            # made (use_ts_threading, automatic_mp4) cover it, and letting
+            # download_video() fall back to an interactive input() per file
+            # means multiple threads race to read stdin at once (this was
+            # producing the repeated, garbled "Threaded Download Option"
+            # prompts interleaved with progress bars). Forcing
+            # interactive=False here makes it silently default instead.
+            # Downloads and conversions are split into two separate phases
+            # instead of each episode converting right after its own
+            # download finishes. Converting mid-batch meant its (occasional
+            # but still live-terminal) output was printed while OTHER
+            # episodes' download bars were still actively redrawing -
+            # mixing those broke the bars' terminal positioning and
+            # produced garbled output. Running every download to
+            # completion first (bars visible throughout, no other prints
+            # happening) then every conversion afterward (bars gone, only
+            # plain text) keeps both phases clean.
+            to_convert = []  # (ep_num, ts_path)
+            # Tried registering tqdm's shared lock in every worker thread
+            # here (tqdm's documented fix for multi-threaded bar corruption)
+            # but it deadlocked once episodes' nested per-segment executor
+            # threads (in download_video.py) also touched that same lock -
+            # reverted. Live-tested and confirmed to hang indefinitely.
+            from src.utils.download import parallel_settings
+            with ThreadPoolExecutor(max_workers=parallel_settings.episode_workers()) as executor:
+                future_to_episode = {
+                    executor.submit(download_episode_with_fallback, ep_num, ep_idx, episodes, player_order, get_anime_name, save_dir, video_src, use_ts_threading, automatic_mp4, pre_selected_tool, args.no_mal, False, automatic_mp4, season_number): ep_num
+                    for ep_num, ep_idx, video_src in zip(episode_numbers, episode_indices, video_sources)
+                }
+                for future in as_completed(future_to_episode):
+                    ep_num = future_to_episode[future]
+                    try:
+                        success, output_path = future.result()
+                        if not success:
+                            failed_downloads += 1
+                        elif automatic_mp4 and output_path and output_path.endswith('.ts'):
+                            to_convert.append((ep_num, output_path))
+                    except Exception as e:
+                        print_status(f"Error ep {ep_num}: {e}", "error")
+                        failed_downloads += 1
+
+            total_episodes = len(episode_indices)
+            downloaded_count = total_episodes - failed_downloads
+            print_status(f"✅ {downloaded_count}/{total_episodes} episode(s) downloaded", "success")
+
+            if to_convert:
+                print_separator()
+                print_status(f"🎬 Conversion .ts → .mp4 ({len(to_convert)} episode(s))", "info")
+                print_separator()
+                # Live-tested: converting these files one at a time takes
+                # ~8-9s each, but running several PyAV conversions
+                # concurrently made the whole batch take 10+ minutes with
+                # almost no CPU progress. Each conversion reads its whole
+                # multi-hundred-MB .ts file via av.open() with a large
+                # probesize/analyzeduration - several of those happening at
+                # once thrashes a spinning disk into near-random-access
+                # territory instead of the fast sequential read a single
+                # conversion gets, which dwarfs any benefit from
+                # parallelism. Converting sequentially instead.
+                for ep_num, ts_path in to_convert:
+                    try:
+                        success, _ = convert_episode_ts_to_mp4(ep_num, ts_path, pre_selected_tool)
+                        if not success: failed_downloads += 1
+                    except Exception as e:
+                        print_status(f"Error converting ep {ep_num}: {e}", "error")
+                        failed_downloads += 1
+        else:
+            for episode_num, ep_idx, video_source in zip(episode_numbers, episode_indices, video_sources):
+                success, _ = download_episode_with_fallback(episode_num, ep_idx, episodes, player_order, get_anime_name, save_dir, video_source, use_ts_threading, automatic_mp4, pre_selected_tool, args.no_mal, interactive, season_number=season_number)
+                if not success: failed_downloads += 1
+
+        print_separator()
+        if failed_downloads == 0:
+            print_status("All downloads completed! 🎉", "success")
+            if interactive and pause_at_end: input(f"{Colors.BOLD}Press Enter to exit...{Colors.ENDC}")
+            return 0
+        else:
+            print_status(f"Completed with {failed_downloads} failed", "warning")
+            if interactive and pause_at_end: input(f"{Colors.BOLD}Press Enter to exit...{Colors.ENDC}")
+            return 1
+
+    except KeyboardInterrupt:
+        print_status("Interrupted", "error")
+        return 1
+    except Exception as e:
+        print_status(f"Error: {e}", "error")
+        return 1
+
+
+def process_season(base_url, args, headers, interactive, pause_at_end=True):
+    """Single-season convenience wrapper: plan then immediately execute -
+    same behavior as before the plan/execute split, for callers that only
+    ever handle one season at a time."""
+    plan = plan_season(base_url, args, headers, interactive)
+    if plan is None:
+        return 1
+    if plan.get("already_done"):
+        return 0
+    return execute_season_plan(plan, pause_at_end=pause_at_end)
 
 
 def main():
-    global _default_dir_override
-    parser = argparse.ArgumentParser(description="Télécharge des matchs NBA depuis basketball-video.com en .mp4 pour Plex.")
-    parser.add_argument("--url", help="URL de la page d'un match")
-    parser.add_argument("--dest", help="Dossier de destination (sinon le chemin par défaut)")
-    parser.add_argument("--default-dir", metavar="CHEMIN", help="Chemin proposé par défaut pour cette session (utilisé par NBA-Downloader.ps1)")
-    parser.add_argument("--set-default-dir", metavar="CHEMIN", help="Définit le chemin par défaut puis quitte")
-    parser.add_argument("--site", help="URL du site si le domaine change (mémorisée)")
-    parser.add_argument("--quality", choices=["480", "720", "1080", "1440", "2160", "best"],
-                        help="Qualité max (défaut 1080, mémorisée). 'best' = la plus haute, souvent ~20 Go par match")
-    parser.add_argument("--threads", type=int, metavar="N",
-                        help="Morceaux téléchargés en parallèle (défaut 32, mémorisé). Plus = plus rapide, jusqu'à la limite de votre connexion")
-    parser.add_argument("--debug", action="store_true", help="Enregistre les pages HTML dans ./debug et affiche les lecteurs détectés")
+    parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument("--url", default=None)
+    parser.add_argument("--search", default=None)
+    parser.add_argument("--episodes", default=None)
+    parser.add_argument("--player", default=None)
+    parser.add_argument("--dest", default=None)
+    parser.add_argument("--threads", action='store_true')
+    parser.add_argument("--fast", action='store_true')
+    parser.add_argument("--mp4", action='store_true')
+    parser.add_argument("--tool", default=None)
+    parser.add_argument("--no-mal", action='store_true', help="Disable MyAnimeList research")
+    parser.add_argument("--latest", action='store_true', help="Download only the latest episode")
+
+    
     args = parser.parse_args()
+    interactive = len(sys.argv) == 1
 
-    if args.set_default_dir:
-        set_setting("nba_default_dir", os.path.expanduser(args.set_default_dir))
-        print_status(f"Chemin par défaut : {args.set_default_dir}", "success")
-        return
-    if args.default_dir:
-        _default_dir_override = os.path.expanduser(args.default_dir)
-    if args.site:
-        set_setting("nba_site_url", args.site.rstrip("/"))
+    if not check_package(ask_install=True, first_run=True):
+        print_status("Some required packages were missing. Would you like to install them now? (y/n): ", "warning")
+        ask_user = input().strip().lower()
+        if ask_user in ['y', 'yes', '1']:
+            if not check_package(ask_install=True, first_run=False):
+                print_status("Failed to install required packages. Please install them manually and re-run the script.", "error")
+                sys.exit(1)
+        else:
+            print_status("Cannot proceed without required packages. Exiting.", "warning")
+            input("Press Enter to exit...")
+            sys.exit(1)
 
-    if args.quality:
-        set_setting("nba_quality", args.quality)
-    if args.threads:
-        set_setting("nba_threads", args.threads)
-    quality = str(get_setting("nba_quality") or "1080")
-    configure(max_height=None if quality == "best" else int(quality),
-              threads=get_setting("nba_threads") or 32)
+    if not check_ffmpeg_installed():
+        print_status("FFmpeg is not installed or not found in the PATH. You could consider installing it from https://ffmpeg.org/download.html", "error")
 
-    site = Site(debug=args.debug)
-    banner(site)
-    print(f"  {Colors.DIM}Chemin par défaut : {default_dir()}{Colors.ENDC}")
-    quality_label = f"{SETTINGS['max_height']}p max" if SETTINGS["max_height"] else "la meilleure"
-    print(f"  {Colors.DIM}Qualité : {quality_label} · {SETTINGS['threads']} téléchargements en parallèle "
-          f"(--quality / --threads pour changer){Colors.ENDC}")
-    ffmpeg_hint()
-    print()
+    try:
+        print_header()
+        
+        base_url = args.url
+        season_urls = None
 
-    if args.url:
-        process_game(site, args.url, args.dest)
-        return
+        if args.search and not base_url:
+            results = search_anime(args.search, headers=headers)
+            if not results:
+                print_status("No results found for search query.", "error")
+                return 1
+            print(f"\n{Colors.BOLD}{Colors.HEADER}🔍 SEARCH RESULTS{Colors.ENDC}")
+            print_separator()
+            for i, res in enumerate(results, 1):
+                support_text = ""
+                if res.get('support') == "Anime Supported":
+                    support_text = f" {Colors.OKGREEN}(Anime Supported){Colors.ENDC}"
+                elif res.get('support') == "Scans Supported":
+                    support_text = f" {Colors.OKGREEN}(Scans Supported){Colors.ENDC}"
+                site_tag = f" [{res.get('site')}]" if res.get('site') else ""
+                print(f"{Colors.OKCYAN}{i}. {res['title']}{site_tag}{support_text} ({res['url']}){Colors.ENDC}")
+            
+            while True:
+                try:
+                    choice = input(f"{Colors.BOLD}Select anime (1-{len(results)}): {Colors.ENDC}").strip()
+                    if choice.isdigit():
+                        idx = int(choice) - 1
+                        if 0 <= idx < len(results):
+                            base_url = results[idx]['url']
+                            break
+                    print_status("Invalid choice", "error")
+                except KeyboardInterrupt:
+                    return 1
 
-    while True:
-        url, listed = choose_game(site)
-        if not url:
-            break
-        process_game(site, url, args.dest, listed)
-        if not yes("\nTélécharger un autre match ?", default=False):
-            break
-        print()
 
+
+        if not base_url:
+            show_tutorial = input(f"{Colors.BOLD}Show tutorial? (y/n, default: n): {Colors.ENDC}").strip().lower()
+            if show_tutorial in ['y', 'yes', '1']:
+                print_tutorial()
+                input(f"\n{Colors.BOLD}Press Enter to continue...{Colors.ENDC}")
+            
+            while True:
+                print(f"\n{Colors.BOLD}{Colors.HEADER}🔗 ANIME-SAMA SELECTION{Colors.ENDC}")
+                print_separator()
+                print(f"{Colors.OKCYAN}1. Paste URL{Colors.ENDC}")
+                print(f"{Colors.OKCYAN}2. Search Anime{Colors.ENDC}")
+                print(f"{Colors.OKCYAN}3. Settings{Colors.ENDC}")
+                mode = input(f"{Colors.BOLD}Choice (1/2/3): {Colors.ENDC}").strip()
+                
+                if mode == '1':
+                    while True:
+                        base_url = input(f"{Colors.BOLD}Enter the complete anime-sama URL: {Colors.ENDC}").strip()
+                        if not base_url: continue
+                        break
+                    break
+                elif mode == '2':
+                    query = input(f"{Colors.BOLD}Enter search query: {Colors.ENDC}").strip()
+                    results = search_anime(query, headers=headers)
+                    if not results:
+                        print_status("No results found.", "error")
+                        continue
+                    
+                    print(f"\n{Colors.BOLD}{Colors.HEADER}🔍 SEARCH RESULTS{Colors.ENDC}")
+                    print_separator()
+                    for i, res in enumerate(results, 1):
+                         support_text = ""
+                         if res.get('support') == "Anime Supported":
+                             support_text = f" {Colors.OKGREEN}(Anime Supported){Colors.ENDC}"
+                         elif res.get('support') == "Scans Supported":
+                             support_text = f" {Colors.OKGREEN}(Scans Supported){Colors.ENDC}"
+                         elif res.get('support') == "Anime & Scans Supported":
+                             support_text = f" {Colors.OKGREEN}(Anime & Scans Supported){Colors.ENDC}"
+                         elif res.get('support') == "Unknown":
+                             support_text = f" {Colors.FAIL}(Status Unknown){Colors.ENDC}"
+                         site_tag = f" [{res.get('site')}]" if res.get('site') else ""
+                         print(f"{Colors.OKCYAN}{i}. {res['title']}{site_tag}{support_text}{Colors.ENDC}")
+                    
+                    valid_choice = False
+                    while True:
+                        choice = input(f"{Colors.BOLD}Select anime (1-{len(results)}) or 'c' to cancel: {Colors.ENDC}").strip()
+                        if choice.lower() == 'c': break
+                        if choice.isdigit():
+                            idx = int(choice) - 1
+                            if 0 <= idx < len(results):
+                                base_url = results[idx]['url']
+                                options = expand_catalogue_url(base_url, headers=headers)
+                                if options:
+                                    anime_opts = []
+                                    scan_opts = []
+                                    for opt in options:
+                                        if '/scan' in opt['url'].lower():
+                                            scan_opts.append(opt)
+                                        else:
+                                            anime_opts.append(opt)
+                                    
+                                    options = anime_opts + scan_opts
+                                    
+                                    print(f"\n{Colors.BOLD}{Colors.HEADER}📅 AVAILABLE SEASONS/VERSIONS{Colors.ENDC}")
+                                    print_separator()
+                                    
+                                    idx_counter = 1
+                                    if anime_opts:
+                                         print(f"{Colors.BOLD}--- Anime ---{Colors.ENDC}")
+                                         for opt in anime_opts:
+                                             print(f"{Colors.OKCYAN}{idx_counter}. {opt['name']} ({opt['url']}){Colors.ENDC}")
+                                             idx_counter += 1
+                                    
+                                    if scan_opts:
+                                         print(f"{Colors.BOLD}--- Scans ---{Colors.ENDC}")
+                                         for opt in scan_opts:
+                                             print(f"{Colors.OKBLUE}{idx_counter}. {opt['name']} ({opt['url']}){Colors.ENDC}")
+                                             idx_counter += 1
+                                    
+                                    while True:
+                                        s_choice = input(
+                                            f"{Colors.BOLD}Select season(s) (1-{len(options)}, "
+                                            "comma-separated example 1,2,3, ranges like 1-3, or 'all'): "
+                                            f"{Colors.ENDC}"
+                                        )
+                                        s_indices = parse_selection_indices(s_choice, len(options))
+                                        if s_indices:
+                                            season_urls = [options[i]['url'] for i in s_indices]
+                                            base_url = season_urls[0]
+                                            valid_choice = True
+                                            break
+                                        print_status("Invalid choice", "error")
+                                    if valid_choice:
+                                        break
+                                else:
+                                    print_status("This page doesn't seem to contain any anime downloadable content.", "warning")
+                                    continue
+                    if valid_choice: 
+                        break
+                elif mode == '3':
+                    settings_menu()
+                else:
+                    print_status("Invalid option", "error")
+        
+        is_valid, _ = validate_anime_sama_url(base_url)
+        if not is_valid:
+            print_status("Checking for seasons/versions...", "info")
+            season_options = expand_catalogue_url(base_url, headers=headers)
+            if season_options:
+                anime_opts = []
+                scan_opts = []
+                for opt in season_options:
+                     if '/scan' in opt['url'].lower():
+                         scan_opts.append(opt)
+                     else:
+                         anime_opts.append(opt)
+                
+                season_options = anime_opts + scan_opts
+
+                print(f"\n{Colors.BOLD}{Colors.HEADER}📅 AVAILABLE SEASONS/VERSIONS{Colors.ENDC}")
+                print_separator()
+
+                idx_counter = 1
+                if anime_opts:
+                        print(f"{Colors.BOLD}--- Anime ---{Colors.ENDC}")
+                        for opt in anime_opts:
+                            print(f"{Colors.OKCYAN}{idx_counter}. {opt['name']} ({opt['url']}){Colors.ENDC}")
+                            idx_counter += 1
+                
+                if scan_opts:
+                        print(f"{Colors.BOLD}--- Scans ---{Colors.ENDC}")
+                        for opt in scan_opts:
+                            print(f"{Colors.OKBLUE}{idx_counter}. {opt['name']} ({opt['url']}){Colors.ENDC}")
+                            idx_counter += 1
+                
+                while True:
+                    choice = input(
+                        f"{Colors.BOLD}Select season(s) (1-{len(season_options)}, "
+                        "comma-separated example 1,2,3, ranges like 1-3, or 'all'): "
+                        f"{Colors.ENDC}"
+                    )
+                    indices = parse_selection_indices(choice, len(season_options))
+                    if indices:
+                        season_urls = [season_options[i]['url'] for i in indices]
+                        base_url = season_urls[0]
+                        break
+                    print_status("Invalid choice", "error")
+            else:
+                 print_status("Could not find any seasons/versions. Please define one manually (url/saison...)", "warning")
+
+        if season_urls is None:
+            season_urls = [base_url]
+
+        multi = len(season_urls) > 1
+        overall_rc = 0
+
+        if not multi:
+            rc = process_season(season_urls[0], args, headers, interactive, pause_at_end=True)
+            return rc if rc != 0 else 0
+
+        # Multi-season: gather every season's answers (player, episodes,
+        # save path, threading/mp4 choices) up front, THEN run every
+        # season's downloads back to back with no further prompts - instead
+        # of interleaving "ask questions" and "download" per season, which
+        # meant coming back every few minutes to answer the next season's
+        # questions.
+        print(f"\n{Colors.BOLD}{Colors.HEADER}=== Configuring {len(season_urls)} seasons ==={Colors.ENDC}")
+        plans = []
+        for i, season_url in enumerate(season_urls):
+            print(f"\n{Colors.BOLD}{Colors.HEADER}--- Season {i + 1}/{len(season_urls)} configuration ---{Colors.ENDC}")
+            plan = plan_season(season_url, args, headers, interactive)
+            if plan is None:
+                overall_rc = 1
+                continue
+            plans.append(plan)
+
+        if not plans:
+            return 1
+
+        print(f"\n{Colors.BOLD}{Colors.HEADER}=== All seasons configured - starting downloads ==={Colors.ENDC}")
+        for i, plan in enumerate(plans):
+            print(f"\n{Colors.BOLD}{Colors.HEADER}=== Season {i + 1}/{len(plans)} download ==={Colors.ENDC}")
+            if plan.get("already_done"):
+                continue
+            rc = execute_season_plan(plan, pause_at_end=False)
+            if rc != 0:
+                overall_rc = 1
+
+        if interactive:
+            input(f"{Colors.BOLD}Press Enter to exit...{Colors.ENDC}")
+
+        return overall_rc
+    except Exception as e:
+        print_status(f"Fatal: {e}", "error")
+        return 1
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print(f"\n{Colors.WARNING}Interrompu. Relancez le même match pour reprendre le téléchargement "
-              f"là où il s'est arrêté.{Colors.ENDC}", flush=True)
-        # yt-dlp downloads fragments in worker threads that a normal exit
-        # waits for ("Waiting for all threads to shutdown..." while the
-        # download keeps going): leave immediately instead. The partial
-        # .part/.ytdl files are kept so the next run resumes.
-        sys.stderr.flush()
-        os._exit(130)
+    sys.exit(main())

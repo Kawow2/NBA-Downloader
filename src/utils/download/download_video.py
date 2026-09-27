@@ -10,6 +10,7 @@ from concurrent.futures                 import ThreadPoolExecutor, as_completed
 from src.var                            import Colors, print_status, DEFAULT_USER_AGENT
 from src.utils.parse.parse_ts_segments  import parse_ts_segments
 from src.utils.tqdm_position             import TqdmPosition as _TqdmPosition
+from src.utils.download                 import parallel_settings
 
 # In batch mode (several episodes downloading in parallel), printing
 # anything per-episode - even one line per completion - while OTHER
@@ -45,6 +46,107 @@ def _report_episode_done(label):
         total = _batch_total
     if not total:
         print_status(f"{label} assembled", "success")
+
+_thread_local = threading.local()
+
+
+def _session():
+    """One keep-alive HTTP session per thread: hundreds of segments reuse
+    the same connection instead of a new TLS handshake each."""
+    session = getattr(_thread_local, "session", None)
+    if session is None:
+        session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=4)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        _thread_local.session = session
+    return session
+
+
+def _fetch_segment(segment_url, headers, index, attempts=5):
+    """Download one segment, retrying with a growing pause (1, 2, 4, 8 s)
+    so a busy CDN under parallel requests gets time to recover."""
+    for attempt in range(attempts):
+        try:
+            response = _session().get(segment_url, headers=headers, timeout=20)
+            response.raise_for_status()
+            return response.content
+        except requests.RequestException as e:
+            if attempt == attempts - 1:
+                print_status(f"Failed to download segment {index+1}: {str(e)}", "error")
+                return None
+            time.sleep(2 ** attempt)
+    return None
+
+
+_RANGE_PIECE = 8 * 1024 * 1024
+
+
+def _download_ranges(url, path, headers, position):
+    """Download a single-file video (Sibnet, Sendvid, direct .mp4) over
+    several connections at once, one byte range each: these hosts throttle
+    every connection. Returns True when done; False when the server doesn't
+    support ranges or a piece keeps failing - the caller then downloads it
+    over one connection as before."""
+    connections = parallel_settings.range_connections()
+    if connections < 2:
+        return False
+    try:
+        probe = requests.get(url, headers={**headers, "Range": "bytes=0-0"}, stream=True, timeout=20)
+        probe.close()
+    except requests.RequestException:
+        return False
+    match = re.match(r"bytes 0-0/(\d+)", probe.headers.get("Content-Range", ""))
+    if probe.status_code != 206 or not match:
+        return False
+    total = int(match.group(1))
+    if total < 2 * _RANGE_PIECE:
+        return False
+    final_url = probe.url  # after redirects (signed CDN links)
+    pieces = [(start, min(start + _RANGE_PIECE, total) - 1) for start in range(0, total, _RANGE_PIECE)]
+    lock = threading.Lock()
+    failed = threading.Event()
+
+    with open(path, "wb") as f, tqdm(total=total, unit="B", unit_scale=True, desc=f"📥 {os.path.basename(path)}",
+                                     bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]',
+                                     position=position, leave=False) as pbar:
+        f.truncate(total)
+
+        def fetch(start, end):
+            for attempt in range(4):
+                if failed.is_set():
+                    return
+                received = bytearray()
+                try:
+                    with _session().get(final_url, headers={**headers, "Range": f"bytes={start}-{end}"},
+                                        stream=True, timeout=30) as response:
+                        if response.status_code != 206:
+                            # The host refuses parallel ranges (403, 429...):
+                            # give up at once, one connection will do.
+                            failed.set()
+                            return
+                        for chunk in response.iter_content(chunk_size=256 * 1024):
+                            received += chunk
+                            pbar.update(len(chunk))
+                    if len(received) == end - start + 1:
+                        with lock:
+                            f.seek(start)
+                            f.write(received)
+                        return
+                except requests.RequestException:
+                    pass
+                pbar.update(-len(received))
+                time.sleep(2 ** attempt)
+            failed.set()
+
+        with ThreadPoolExecutor(max_workers=connections) as executor:
+            list(executor.map(lambda piece: fetch(*piece), pieces))
+
+    if failed.is_set() or os.path.getsize(path) != total:
+        print_status("Multi-connection download refused by the host, retrying over one connection...", "warning")
+        return False
+    return True
+
 
 def download_video(video_url, save_path, use_ts_threading=False, url='',automatic_mp4=False, threaded_mp4=False, interactive=True):
     # "Starting download" is printed by the caller (download_episode.py) as
@@ -163,67 +265,59 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
                 use_threads = use_ts_threading
             
             if use_threads:
-                segment_data = []
-                
-                def download_segment(segment_url, index):
-                    for attempt in range(3):
-                        try:
-                            seg_response = requests.get(segment_url, headers=headers, stream=True, timeout=10)
-                            seg_response.raise_for_status()
-                            return index, seg_response.content
-                        except requests.RequestException as e:
-                            if attempt < 2:
-                                time.sleep(2)
-                            else:
-                                print_status(f"Failed to download segment {index+1}: {str(e)}", "error")
-                                return index, None
-                    return index, None
-
-                with ThreadPoolExecutor(max_workers=10) as executor:
-                    future_to_segment = {executor.submit(download_segment, url, i): i for i, url in enumerate(segments)}
-                    with tqdm(total=len(segments), desc=f"📥 {random_string}", unit="segment", position=tqdm_position, leave=False) as pbar:
-                        for future in as_completed(future_to_segment):
-                            index, content = future.result()
-                            if content is None:
-                                print_status(f"Aborting download due to failure in segment {index+1}", "error")
-                                return False, None
-                            segment_data.append((index, content))
-                            pbar.update(1)
-
-                segment_data.sort(key=lambda x: x[0])
-                
-                with open(temp_ts_path, 'wb') as f:
-                    for _, content in segment_data:
-                        f.write(content)
+                # Segments are written in order as soon as they're contiguous,
+                # instead of holding the whole episode in memory until the end.
+                pending, next_index, failed = {}, 0, False
+                with open(temp_ts_path, 'wb') as f, \
+                        ThreadPoolExecutor(max_workers=parallel_settings.segment_workers()) as executor, \
+                        tqdm(total=len(segments), desc=f"📥 {random_string}", unit="segment", position=tqdm_position, leave=False) as pbar:
+                    future_to_segment = {executor.submit(_fetch_segment, seg_url, headers, i): i for i, seg_url in enumerate(segments)}
+                    for future in as_completed(future_to_segment):
+                        index = future_to_segment[future]
+                        content = future.result()
+                        if content is None:
+                            print_status(f"Aborting download due to failure in segment {index+1}", "error")
+                            for other in future_to_segment:
+                                other.cancel()
+                            failed = True
+                            break
+                        pending[index] = content
+                        while next_index in pending:
+                            f.write(pending.pop(next_index))
+                            next_index += 1
+                        pbar.update(1)
+                if failed:
+                    try:
+                        os.remove(temp_ts_path)
+                    except OSError:
+                        pass
+                    return False, None
             else:
                 with open(temp_ts_path, 'wb') as f:
                     for i, segment_url in enumerate(tqdm(segments, desc=f"📥 {random_string}", unit="segment", position=tqdm_position, leave=False)):
-                        for attempt in range(3):
-                            try:
-                                seg_response = requests.get(segment_url, headers=headers, stream=True, timeout=10)
-                                seg_response.raise_for_status()
-                                f.write(seg_response.content)
-                                break
-                            except requests.RequestException as e:
-                                if attempt < 2:
-                                    time.sleep(2)
-                                else:
-                                    print_status(f"Failed to download segment {i+1}: {str(e)}", "error")
-                                    return False, None
+                        content = _fetch_segment(segment_url, headers, i)
+                        if content is None:
+                            return False, None
+                        f.write(content)
 
             if _batch_total == 0:
                 print_status(f"Combined {len(segments)} segments into {temp_ts_path}", "success")
             _report_episode_done(random_string)
             return True, temp_ts_path
         else:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            if _download_ranges(video_url, save_path, headers, tqdm_position):
+                if _batch_total == 0:
+                    print_status(f"Download completed successfully!", "success")
+                _report_episode_done(os.path.basename(save_path))
+                return True, save_path
+
             response = requests.get(video_url, stream=True, headers=headers, timeout=30)
             total_size = int(response.headers.get('content-length', 0))
             
             if response.status_code != 200:
                 print_status(f"Download failed with status code: {response.status_code}", "error")
                 return False, None
-            
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
             with open(save_path, 'wb') as f:
                 with tqdm(
