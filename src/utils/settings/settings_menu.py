@@ -15,6 +15,10 @@ def settings_menu():
 
         print(f"{Colors.OKCYAN}1. Change Save Path Template{Colors.ENDC}")
         print(f"   {Colors.WARNING}Current: {current_template}{Colors.ENDC}")
+        if os.environ.get("ANIME_DEFAULT_DIR"):
+            # Set by the Anime/NBA menu (src/launcher.py), which takes precedence.
+            print(f"   {Colors.WARNING}Used instead: {os.path.join(os.environ['ANIME_DEFAULT_DIR'], '{anime}', '{season}')} "
+                  f"(Anime folder of the main menu){Colors.ENDC}")
         print(f"   {Colors.FAIL}Keywords: {{anime}}, {{season}}{Colors.ENDC}")
         print(f"\n{Colors.OKCYAN}2. Change Plex Identification Method{Colors.ENDC}")
         print(f"   {Colors.WARNING}Current: {current_id_mode}{Colors.ENDC}")

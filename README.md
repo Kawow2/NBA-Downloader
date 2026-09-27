@@ -1,8 +1,36 @@
-# 🏀 NBA Replay Downloader (basketball-video.com → Plex)
+# 🎌🏀 Anime & NBA Downloader → Plex
 
-Télécharge les replays de matchs NBA de [basketball-video.com](https://basketball-video.com) en **.mp4**, rangés et nommés pour **Plex**.
+Un seul programme, un menu au démarrage :
 
-## Lancement (PowerShell + venv)
+- **🎌 Anime** : le téléchargeur Anime-Sama / Nakanime de [SertraFurr/anime-sama-nakanime-downloader](https://github.com/SertraFurr/anime-sama-nakanime-downloader) (documentation plus bas), avec en plus des **téléchargements en parallèle** ;
+- **🏀 NBA** : les replays de [basketball-video.com](https://basketball-video.com) en **.mp4** rangés et nommés pour Plex.
+
+Chaque catégorie a **son propre dossier** (sa bibliothèque Plex), demandé la première fois qu'on l'utilise et modifiable dans **Réglages**.
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║                  ANIME  &  NBA  DOWNLOADER                   ║
+╚══════════════════════════════════════════════════════════════╝
+  1. 🎌 Anime  (anime-sama, nakanime)   → /srv/plex/Anime
+  2. 🏀 NBA    (basketball-video.com)   → /srv/plex/Sports/NBA
+  3. ⚙️  Réglages (dossiers, parallélisme, qualité)
+  q. Quitter
+```
+
+## Lancement
+
+### Linux / macOS (ex. portable serveur Plex, via SSH)
+
+```bash
+sudo apt install git python3-venv ffmpeg tmux     # Debian/Ubuntu (dnf, pacman... selon la distribution)
+git clone https://github.com/Kawow2/NBA-Downloader.git && cd NBA-Downloader
+./start.sh --tmux
+```
+
+`start.sh` crée l'environnement virtuel `.venv` au premier lancement, y installe `requirements.txt`, puis lance `main.py`.
+Avec `--tmux`, le programme tourne dans une session tmux : **si la connexion SSH coupe, les téléchargements continuent**. Se détacher : `Ctrl+B` puis `D` ; revenir : `./start.sh --tmux`.
+
+### Windows (PowerShell)
 
 Prérequis : Python 3.8+ (`winget install Python.Python.3.12`) et, fortement conseillé, ffmpeg (`winget install Gyan.FFmpeg`).
 
@@ -11,26 +39,65 @@ cd C:\chemin\vers\NBA-Downloader
 .\start.ps1
 ```
 
-`start.ps1` crée l'environnement virtuel `.venv` au premier lancement, y installe `requirements.txt`, puis lance `main.py` avec le Python du venv.
 Si Windows refuse d'exécuter le script : `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
-Équivalent manuel :
+Équivalent manuel (les deux systèmes) : `python -m venv .venv`, activer le venv, `pip install -r requirements.txt`, `python main.py`.
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python main.py
+### Raccourcis
+
+| Commande | Rôle |
+| --- | --- |
+| `python main.py` | menu Anime / NBA |
+| `python main.py anime [options]` | directement les animes (`--search`, `--url`, `--episodes`... voir plus bas) |
+| `python main.py nba [options]` | directement la NBA (`--url`, `--quality`, `--threads`... voir plus bas) |
+| `python main.py --set-anime-dir DOSSIER` | dossier par défaut des animes |
+| `python main.py --set-nba-dir DOSSIER` | dossier par défaut de la NBA |
+| `--anime-dir` / `--nba-dir DOSSIER` | dossier pour ce lancement seulement (c'est ce que font les variables `CHEMIN_ANIME` / `CHEMIN_NBA` de `start.sh`, `$CheminAnime` / `$CheminNBA` de `start.ps1`) |
+
+Sans `anime`/`nba`, les options propres à un seul des deux programmes (ex. `--search`, `--quality`) ou l'adresse donnée à `--url` suffisent à choisir.
+
+## Réglages (menu `3`)
+
+| Réglage | Défaut |
+| --- | --- |
+| Dossier des animes | demandé au 1er lancement (proposé : `~/Videos/Anime`) |
+| Dossier NBA | demandé au 1er lancement (proposé : `~/Videos/NBA`) |
+| Anime : morceaux téléchargés en parallèle par épisode | 16 |
+| Anime : épisodes téléchargés en même temps | 2 |
+| NBA : morceaux téléchargés en parallèle | 32 |
+| NBA : qualité max | 1080p |
+
+Tout est mémorisé dans `src/utils/config/config.json`.
+
+## Serveur Plex sur un portable Linux
+
+Disposition conseillée (deux bibliothèques Plex de type **Séries TV**) :
+
+```
+/srv/plex/Anime/                ← dossier des animes   = bibliothèque « Anime »
+    roshidere/saison1/…
+/srv/plex/Sports/NBA/           ← dossier NBA          (bibliothèque « Sports » = /srv/plex/Sports)
+    Season 2026/NBA - 2026-06-13 - New York Knicks vs San Antonio Spurs - NBA Finals Game 5.mp4
 ```
 
-### Sous Linux / macOS
+- Plex tourne sous l'utilisateur `plex` : il doit pouvoir lire ces dossiers, ex. `sudo chmod -R o+rX /srv/plex`.
+- Anime-Sama peut demander le cookie Cloudflare `cf_clearance` et le User-Agent d'un navigateur : récupérez-les sur un PC **du même réseau** (le cookie est lié à l'adresse IP publique) avec le même navigateur.
+- Identification Plex des animes (fichier `.match` MyAnimeList, ou tag TVDB/IMDb dans le nom du dossier) : réglage `3. Settings` du menu anime.
 
-```bash
-sudo apt install ffmpeg python3-venv   # Debian/Ubuntu (dnf, pacman... selon la distribution)
-./start.sh
-```
+## Anime : téléchargements en parallèle
 
-`start.sh` fait la même chose que `start.ps1` (venv `.venv`, dépendances, puis `main.py`) ; le chemin par défaut se règle dans sa ligne `CHEMIN_PAR_DEFAUT=`.
+Par rapport au dépôt d'origine, sans rien avoir à répondre :
+
+- les segments vidéo (lecteurs HLS : Vidmoly, VOE, Filemoon…) d'un épisode se téléchargent **16 à la fois** (avant : 10, et seulement en répondant « y »), sur des connexions réutilisées, avec des nouvelles tentatives espacées, et sont écrits sur le disque au fur et à mesure (avant : tout l'épisode restait en mémoire) ;
+- les lecteurs à fichier unique (Sibnet, Sendvid…) se téléchargent sur **plusieurs connexions** à la fois (8 au plus), avec retour automatique à une seule connexion si l'hébergeur refuse ;
+- les épisodes d'une saison se téléchargent **2 à la fois** ;
+- `Ctrl+C` arrête tout immédiatement.
+
+Sur un serveur de test qui bride chaque connexion comme les hébergeurs : épisode HLS 10,7 s → 0,9 s, fichier unique 11,9 s → 2,5 s.
+
+---
+
+# 🏀 NBA
 
 ## Déroulement
 
@@ -38,42 +105,32 @@ sudo apt install ffmpeg python3-venv   # Debian/Ubuntu (dnf, pacman... selon la 
 2. **Match** : choisir le numéro dans la liste.
 3. **Serveur** : choisir le serveur (VOE, Filemoon, OK.ru, Streamtape...).
 4. **Parties** : taper les parties voulues, ex. `1-2-3` (= parties 1, 2 et 3), `2`, ou Entrée pour toutes.
-5. **Chemin** : Entrée = chemin par défaut, ou taper un autre chemin (le programme propose alors de le garder comme défaut).
+5. **Chemin** : Entrée = dossier NBA, ou taper un autre chemin (le programme propose alors de le garder comme défaut).
 6. **Nom du fichier** : le titre affiché dans la liste / la recherche (ou le match choisi sur une page qui en contient plusieurs). S'il ne suffit pas à identifier un match (pas de « A vs B » ou pas de date), le programme demande un nom.
 7. **Téléchargement** en .mp4 (sans ré-encodage). Si plusieurs parties sont choisies, elles sont toujours fusionnées en un seul fichier (ré-encodées seulement si elles viennent de serveurs différents). Si une partie échoue sur un serveur, la même partie est retentée sur les autres serveurs. Une fois le match terminé, ses fichiers temporaires (`.part`, `.ytdl`) sont supprimés ; ceux d'anciens téléchargements interrompus sont proposés à la suppression. Après un Ctrl+C, relancer le même match reprend le téléchargement.
-
-## Chemin par défaut
-
-Au choix :
-
-- dans `start.ps1`, ligne `$CheminParDefaut = "D:\Plex\Sports\NBA"` ;
-- ou `python main.py --set-default-dir "D:\Plex\Sports\NBA"` (mémorisé dans `src/utils/config/config.json`) ;
-- sinon : `%USERPROFILE%\Videos\NBA`.
 
 ## Organisation pour Plex
 
 ```
-<chemin par défaut>\Season 2026\NBA - 2026-06-13 - New York Knicks vs San Antonio Spurs - NBA Finals Game 5.mp4
+<dossier NBA>\Season 2026\NBA - 2026-06-13 - New York Knicks vs San Antonio Spurs - NBA Finals Game 5.mp4
 ```
 
-Créez une bibliothèque Plex de type **Séries TV** dont le dossier contient le dossier `NBA` (le chemin par défaut). Plex reconnaît les épisodes datés (`AAAA-MM-JJ`). Les parties non fusionnées sont nommées `... - pt1.mp4`, `... - pt2.mp4`, que Plex regroupe.
+Créez une bibliothèque Plex de type **Séries TV** sur le dossier qui **contient** le dossier NBA (ex. bibliothèque `/srv/plex/Sports` pour le dossier NBA `/srv/plex/Sports/NBA`). Plex reconnaît les épisodes datés (`AAAA-MM-JJ`). Les parties non fusionnées sont nommées `... - pt1.mp4`, `... - pt2.mp4`, que Plex regroupe.
 
-## Options
+## Options (`python main.py nba ...`)
 
 | Option | Rôle |
 | --- | --- |
 | `--url <URL>` | télécharger directement ce match |
 | `--dest <chemin>` | dossier de destination sans poser la question |
-| `--set-default-dir <chemin>` | enregistrer le chemin par défaut |
 | `--site <URL>` | si le site change de domaine (mémorisé) |
 | `--quality 720\|1080\|1440\|2160\|best` | qualité max (défaut 1080p, mémorisée) ; `best` ≈ 20 Go par match chez OK.ru |
 | `--threads <N>` | morceaux téléchargés en parallèle (défaut 32, mémorisé) ; à augmenter sur une connexion rapide |
 | `--debug` | enregistre les pages dans `./debug` et affiche les lecteurs détectés |
 
 Si aucun lecteur n'est détecté sur une page (changement de mise en page du site), relancez avec `--debug` : les pages HTML sauvegardées dans `./debug` permettent d'adapter `src/nba/site.py`.
-Si le site est derrière Cloudflare, le programme demande le cookie `cf_clearance` et le User-Agent du navigateur. Si un hébergeur ne marche plus, mettez yt-dlp à jour : `.\.venv\Scripts\python.exe -m pip install -U yt-dlp`.
+Si le site est derrière Cloudflare, le programme demande le cookie `cf_clearance` et le User-Agent du navigateur. Si un hébergeur ne marche plus, mettez yt-dlp à jour : `.venv/bin/python -m pip install -U "yt-dlp[default,curl-cffi]"` (Windows : `.\.venv\Scripts\python.exe -m pip ...`).
 
-L'ancien téléchargeur d'animes (Anime-Sama / Nakanime) est toujours disponible via `python anime_main.py`.
 
 ---
 
@@ -167,10 +224,10 @@ git clone https://github.com/SertraFurr/Anime-Downloader.git
 cd Anime-Downloader
 
 # 3. Run it.
-python3 anime_main.py
+python3 main.py
 
 # Or use the CLI arguments.
-python3 anime_main.py --help
+python3 main.py anime --help
 ```
 
 ---
@@ -198,17 +255,17 @@ You can use the script entirely from the command line without interactive prompt
 
 **1. Search and Download Interactively:**
 ```bash
-python anime_main.py --search "roshidere"
+python main.py anime --search "roshidere"
 ```
 
 **2. Download Specific Episodes from URL (Fast Mode):**
 ```bash
-python anime_main.py --url "https://anime-sama.tv/catalogue/roshidere/saison1/vostfr/" --episodes "1,2" --fast --mp4
+python main.py anime --url "https://anime-sama.tv/catalogue/roshidere/saison1/vostfr/" --episodes "1,2" --fast --mp4
 ```
 
 **3. Download ALL episodes from a specific player:**
 ```bash
-python anime_main.py --search "one piece" --player "Sibnet" --episodes "all" --threads
+python main.py anime --search "one piece" --player "Sibnet" --episodes "all" --threads
 ```
 
 ---
