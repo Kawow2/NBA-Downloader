@@ -23,6 +23,7 @@ from src.utils.check.check_ffmpeg_installed import check_ffmpeg_installed
 from src.utils.download.verify_video_file import verify_video_file
 from src.nba.hosts import builtin_stream, has_builtin, patch_ytdlp
 from src.utils.mp4_faststart import ensure_faststart
+from src.utils.ffmpeg_progress import run_ffmpeg, media_duration
 
 # Download settings, set by main.py (--quality / --threads, remembered).
 # OK.ru throttles each connection, so throughput comes from fetching many
@@ -127,10 +128,9 @@ def _explain_dns_failure(url):
 
 def ffmpeg_remux(src, out_path):
     tmp = out_path + ".part"
-    print_status("Finalisation du fichier .mp4 (peut prendre quelques minutes sur un disque externe)...", "loading")
-    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-stats", "-i", src,
-           "-c", "copy", "-movflags", "+faststart", "-f", "mp4", tmp]
-    if subprocess.run(cmd).returncode != 0:
+    ok = run_ffmpeg(["-i", src, "-c", "copy", "-movflags", "+faststart", "-f", "mp4", tmp],
+                    "⏳ Finalisation du .mp4", media_duration(src))
+    if not ok:
         _cleanup(tmp)
         return False
     if _finish(tmp, out_path):
@@ -198,13 +198,13 @@ def _merge_reencode(paths, out_path):
         labels += f"[v{i}][a{i}]"
     graph = ";".join(chains) + f";{labels}concat=n={len(paths)}:v=1:a=1[v][a]"
     tmp = out_path + ".part"
-    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-stats"] + inputs + [
+    args = inputs + [
         "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-b:a", "160k",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart", "-f", "mp4", tmp]
     print_status("Les parties n'ont pas le même encodage (serveurs différents) : fusion avec ré-encodage "
-                 "(plus lent, plusieurs minutes)...", "loading")
-    ok = subprocess.run(cmd).returncode == 0 and _finish(tmp, out_path)
+                 "(plus lent)...", "loading")
+    ok = run_ffmpeg(args, "🔗 Fusion (ré-encodage)", sum(pr[4] for pr in probes)) and _finish(tmp, out_path)
     if not ok:
         _cleanup(tmp)
     return ok
@@ -223,11 +223,16 @@ def merge_parts(paths, out_path):
             escaped = os.path.abspath(p).replace("'", "'\\''")
             f.write(f"file '{escaped}'\n")
     tmp = out_path + ".part"
-    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-stats", "-f", "concat", "-safe", "0",
-           "-i", list_path, "-c", "copy", "-movflags", "+faststart", "-f", "mp4", tmp]
-    print_status("Fusion des parties en un seul fichier (quelques minutes pour un match entier)...", "loading")
+    # Picture copied as-is (lossless). Sound re-encoded with resync: parts
+    # cut from HLS streams rarely have sound exactly as long as the
+    # picture, and pasting them end to end as-is gives crackles or a drift
+    # at every join. aresample=async fills/trims those few milliseconds.
+    args = ["-f", "concat", "-safe", "0", "-i", list_path, "-map", "0:v:0", "-map", "0:a:0?",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-af", "aresample=async=1:first_pts=0",
+            "-movflags", "+faststart", "-f", "mp4", tmp]
+    total = sum(d for d in (media_duration(p) for p in paths) if d) or None
     try:
-        ok = subprocess.run(cmd).returncode == 0 and _finish(tmp, out_path)
+        ok = run_ffmpeg(args, "🔗 Fusion des parties", total) and _finish(tmp, out_path)
     finally:
         _cleanup(list_path)
     if not ok:

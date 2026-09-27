@@ -8,9 +8,9 @@ a stream copy with ffmpeg, no re-encoding.
 import os
 import shutil
 import struct
-import subprocess
 
 from src.var import print_status
+from src.utils.ffmpeg_progress import run_ffmpeg, media_duration
 
 
 def _top_level_boxes(path, limit=64):
@@ -55,14 +55,11 @@ def ensure_faststart(path, quiet=False):
         return False
     tmp = path + ".faststart.part"
     if not quiet:
-        print_status(f"Optimisation pour la lecture en streaming (faststart) : {os.path.basename(path)}", "loading")
+        print_status(f"Faststart (index en début de fichier, sans ré-encodage) : {os.path.basename(path)}", "loading")
+    duration = media_duration(path)
     for mapping in (["-map", "0"], []):  # every stream; if that fails, the main ones
-        cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", path, *mapping,
-               "-c", "copy", "-ignore_unknown", "-movflags", "+faststart", "-f", "mp4", tmp]
-        try:
-            ok = subprocess.run(cmd).returncode == 0
-        except OSError:
-            ok = False
+        ok = run_ffmpeg(["-i", path, *mapping, "-c", "copy", "-ignore_unknown",
+                         "-movflags", "+faststart", "-f", "mp4", tmp], "⚡ Faststart", duration)
         if ok and os.path.exists(tmp) and os.path.getsize(tmp) > 0 and is_faststart(tmp):
             os.replace(tmp, path)
             return True
