@@ -125,7 +125,8 @@ def _explain_dns_failure(url):
 
 def ffmpeg_remux(src, out_path):
     tmp = out_path + ".part"
-    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", src,
+    print_status("Finalisation du fichier .mp4 (peut prendre quelques minutes sur un disque externe)...", "loading")
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-stats", "-i", src,
            "-c", "copy", "-movflags", "+faststart", "-f", "mp4", tmp]
     if subprocess.run(cmd).returncode != 0:
         _cleanup(tmp)
@@ -220,9 +221,9 @@ def merge_parts(paths, out_path):
             escaped = os.path.abspath(p).replace("'", "'\\''")
             f.write(f"file '{escaped}'\n")
     tmp = out_path + ".part"
-    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0",
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-stats", "-f", "concat", "-safe", "0",
            "-i", list_path, "-c", "copy", "-movflags", "+faststart", "-f", "mp4", tmp]
-    print_status("Fusion des parties en un seul fichier...", "loading")
+    print_status("Fusion des parties en un seul fichier (quelques minutes pour un match entier)...", "loading")
     try:
         ok = subprocess.run(cmd).returncode == 0 and _finish(tmp, out_path)
     finally:
@@ -276,6 +277,21 @@ def _download_with_extractors(embed_url, out_path):
 
 
 # ------------------------------------------------------------------ yt-dlp
+def _ytdlp_progress(d):
+    # Once every fragment is in, yt-dlp still joins them into one file:
+    # a silent step of a minute or more for a full game on an external disk.
+    if d.get("status") == "finished":
+        print_status("Morceaux téléchargés : assemblage du fichier...", "loading")
+
+
+def _ytdlp_postprocessing(d):
+    if d.get("status") == "started":
+        names = {"FixupM3u8": "correction du flux", "Merger": "fusion image + son",
+                 "FFmpegVideoRemuxer": "conversion en .mp4", "MoveFiles": "déplacement"}
+        step = names.get(d.get("postprocessor"), d.get("postprocessor"))
+        print_status(f"Finalisation : {step}...", "loading")
+
+
 def _download_with_ytdlp(embed_url, out_path, page_url, origin=None):
     try:
         import yt_dlp
@@ -296,6 +312,11 @@ def _download_with_ytdlp(embed_url, out_path, page_url, origin=None):
                          **({"Origin": origin} if origin else {})},
         "noplaylist": True,
         "retries": 10,
+        # A connection that stops sending data is dropped and the fragment
+        # retried, instead of waiting on it forever at 99.x %.
+        "socket_timeout": 30,
+        "progress_hooks": [_ytdlp_progress],
+        "postprocessor_hooks": [_ytdlp_postprocessing],
         "fragment_retries": 10,
         "concurrent_fragment_downloads": SETTINGS["threads"],
         "overwrites": True,
