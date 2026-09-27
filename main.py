@@ -42,9 +42,10 @@ ensure_requirements()
 from src.var import Colors, print_status, print_separator
 from src.utils.config.config import get_setting, set_setting
 from src.utils.check.check_ffmpeg_installed import check_ffmpeg_installed
-from src.nba.site import Site
+from src.nba.site import Site, parse_date
 from src.nba.plex import plex_target
-from src.nba.downloader import download_part, merge_parts, ffmpeg_hint, ffmpeg_install_command, configure, SETTINGS
+from src.nba.downloader import (download_part, merge_parts, ffmpeg_hint, ffmpeg_install_command, configure,
+                                SETTINGS, temp_files)
 
 FALLBACK_DEFAULT_DIR = os.path.join(os.path.expanduser("~"), "Videos", "NBA")
 
@@ -93,9 +94,9 @@ def choose_game(site):
         print(f"  {Colors.DIM}(ou collez directement l'URL d'un match — q pour quitter){Colors.ENDC}")
         choice = ask("Choix : ")
         if choice.lower() in ("q", "quit", "exit"):
-            return None
+            return None, None
         if choice.startswith("http"):
-            return choice
+            return choice, None
         if choice == "1":
             print_status("Récupération des derniers matchs...", "loading")
             games = site.latest_games(10)
@@ -118,7 +119,7 @@ def choose_game(site):
             if not pick:
                 break
             if pick.isdigit() and 1 <= int(pick) <= len(games):
-                return games[int(pick) - 1].url
+                return games[int(pick) - 1].url, games[int(pick) - 1]
             print_status("Numéro invalide.", "error")
 
 
@@ -208,7 +209,32 @@ def alternatives(servers, chosen, part_index):
     return alts
 
 
-def process_game(site, url, cli_dest):
+def file_name(game, dest, section, listed):
+    """Folder and file name for the game: the chosen game's heading on a
+    multi-game page, else the title shown in the search/latest list, else
+    the page title. When that doesn't identify a game (no date or no
+    "A vs B"), ask for a name, suggesting one."""
+    if listed and not game.date and listed.date:
+        game.date = listed.date
+    title = section or (listed.title if listed else None) or game.title
+    folder, stem = plex_target(game, dest, title=title)
+    if game.date and re.search(r"\bvs?\.?\s", title, re.IGNORECASE):
+        return folder, stem
+    print(f"\n{Colors.BOLD}{Colors.HEADER}📝 NOM DU FICHIER{Colors.ENDC}")
+    print(f"  {Colors.DIM}Proposé : {stem}.mp4{Colors.ENDC}")
+    typed = ask("Nom du match (Entrée = nom proposé, ex : Lakers vs Celtics - Game 7) : ")
+    if typed:
+        custom = type(game)(game.url, typed)
+        custom.date = parse_date(typed) or game.date
+        folder, stem = plex_target(custom, dest, title=typed)
+        if not custom.date:
+            day = ask("Date du match (AAAA-MM-JJ, Entrée = aucune) : ")
+            custom.date = parse_date(day)
+            folder, stem = plex_target(custom, dest, title=typed)
+    return folder, stem
+
+
+def process_game(site, url, cli_dest, listed=None):
     print_status("Analyse de la page du match...", "loading")
     game, servers = site.fetch_game(url)
     if not game:
@@ -225,7 +251,8 @@ def process_game(site, url, cli_dest):
     picked = choose_parts(server)
     dest = choose_dest(cli_dest)
 
-    folder, stem = plex_target(game, dest, title=section)
+    folder, stem = file_name(game, dest, section, listed)
+    print_status(f"Fichier : {os.path.join(folder, stem)}.mp4", "info")
     single = len(server.parts) == 1
     # Several parts are always joined into one file once all are downloaded.
     merge = len(picked) > 1
@@ -281,6 +308,36 @@ def process_game(site, url, cli_dest):
         print(f"  {Colors.OKGREEN}✔{Colors.ENDC} {p}")
     if failed:
         print(f"  {Colors.FAIL}✘ {failed} partie(s) en échec{Colors.ENDC}")
+    clean_temp_files(folder, stem, keep_own=bool(failed))
+
+
+def clean_temp_files(folder, stem, keep_own=False):
+    """Delete the game's .part/.ytdl leftovers once it is complete (they
+    are kept while it isn't: they let the next run resume), then offer to
+    delete leftovers of older, interrupted downloads in the same folder."""
+    if not os.path.isdir(folder):
+        return
+    if not keep_own:
+        for p in temp_files(folder, stem):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    others = [p for p in temp_files(folder) if keep_own is False or not os.path.basename(p).startswith(stem)]
+    if not others:
+        return
+    size = sum(os.path.getsize(p) for p in others if os.path.exists(p)) / 1024 ** 3
+    print_status(f"{len(others)} fichier(s) temporaire(s) d'anciens téléchargements interrompus ({size:.1f} Go) "
+                 f"dans {folder}.", "info")
+    if yes("Les supprimer ? (on ne pourra plus reprendre ces téléchargements)", default=True):
+        removed = 0
+        for p in others:
+            try:
+                os.remove(p)
+                removed += 1
+            except OSError:
+                pass
+        print_status(f"{removed} fichier(s) supprimé(s).", "success")
 
 
 def main():
@@ -329,10 +386,10 @@ def main():
         return
 
     while True:
-        url = choose_game(site)
+        url, listed = choose_game(site)
         if not url:
             break
-        process_game(site, url, args.dest)
+        process_game(site, url, args.dest, listed)
         if not yes("\nTélécharger un autre match ?", default=False):
             break
         print()

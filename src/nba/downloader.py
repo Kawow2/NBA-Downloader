@@ -11,6 +11,7 @@ yt-dlp first; whichever fails falls back to the other. OK.ru and
 Dailymotion fall back to the built-in extractors in hosts.py instead.
 """
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -358,6 +359,23 @@ def download_part(embed_url, out_path, page_url=None):
             print_status(f"Échec ({name}) : {e}", "error")
         print_status(f"{name} n'a pas pu télécharger {embed_url[:70]}", "warning")
     return False
+
+
+# Leftovers of a download: our own "<file>.mp4.part" and concat lists,
+# yt-dlp's ".part", ".part-FragN", ".ytdl" and its "<name>.ytdlp.*"
+# intermediate files (renamed to the final name once complete).
+_TEMP_FILE = re.compile(r"(\.part(-Frag\d+(\.part)?)?|\.ytdl|\.mp4\.txt)$|\.ytdlp\.", re.IGNORECASE)
+
+
+def temp_files(folder, stem=None):
+    """Temporary download files in folder (only those of stem if given)."""
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    return [os.path.join(folder, n) for n in names
+            if _TEMP_FILE.search(n) and (stem is None or n.startswith(stem))
+            and os.path.isfile(os.path.join(folder, n))]
 
 
 def ffmpeg_install_command():
