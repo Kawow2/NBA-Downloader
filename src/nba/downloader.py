@@ -36,6 +36,21 @@ def configure(max_height=None, threads=None):
         SETTINGS["threads"] = max(1, int(threads))
 
 
+class VideoGone(Exception):
+    """The host says the video no longer exists (removed, copyright block,
+    private...): no point trying another method on the same link."""
+
+
+_GONE = re.compile(r"blocked due to author|copyright|has been (removed|deleted)|removed by|deleted|"
+                   r"\bnot found\b|no longer (exists|available)|contenu rejet|private video|"
+                   r"vid[ée]o (supprim|priv)", re.IGNORECASE)
+
+
+def _clean_error(error):
+    # "ERROR: [Odnoklassniki] 1486911...: Video has been blocked..." -> the reason only
+    return re.sub(r"^(ERROR:\s*)?(\[[^\]]+\]\s*)?([\w-]+:\s*)?", "", error).strip()
+
+
 EXTRACTOR_HOSTS = (
     "vidzy", "luluvdo", "lulustream", "filemoon", "bysesukior", "voe", "vidmoly", "sendvid",
     "embed4me", "video.sibnet.ru", "uqload", "oneupload", "ansembed", "dingtezuni", "mivalyo",
@@ -232,6 +247,14 @@ def _download_with_extractors(embed_url, out_path):
         if not stream:
             return False
 
+    # yt-dlp fetches the stream's fragments in parallel (settings: threads);
+    # ffmpeg reads them one after another on a single connection (~40 Mbit/s
+    # seen on Filemoon), so it only comes second.
+    try:
+        if _download_with_ytdlp(stream, out_path, referer, origin=_origin(referer)):
+            return True
+    except VideoGone:
+        pass
     if check_ffmpeg_installed():
         return ffmpeg_copy(stream, out_path, referer=referer)
 
@@ -300,7 +323,9 @@ def _download_with_ytdlp(embed_url, out_path, page_url, origin=None):
                  if f.startswith(prefix) and not f.endswith((".part", ".ytdl")) and ".part-Frag" not in f]
         path = max(found, key=os.path.getsize) if found else None
     if not path or not os.path.exists(path):
-        if error:
+        if error and _GONE.search(error):
+            raise VideoGone(_clean_error(error))
+        if error and not error.startswith("ERROR"):  # yt-dlp already printed its "ERROR:" lines
             print_status(f"yt-dlp : {error}", "error")
         return False
     if error:
@@ -359,6 +384,9 @@ def download_part(embed_url, out_path, page_url=None):
         try:
             if run():
                 return True
+        except VideoGone as gone:
+            print_status(f"Vidéo retirée par l'hébergeur ({gone}) : serveur suivant.", "error")
+            return False
         except Exception as e:
             print_status(f"Échec ({name}) : {e}", "error")
         print_status(f"{name} n'a pas pu télécharger {embed_url[:70]}", "warning")
