@@ -14,6 +14,7 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 from urllib.parse import urlparse
 
 from src.var import Colors, DEFAULT_USER_AGENT, print_status
@@ -195,7 +196,7 @@ def _download_with_extractors(embed_url, out_path):
 
 
 # ------------------------------------------------------------------ yt-dlp
-def _download_with_ytdlp(embed_url, out_path, page_url):
+def _download_with_ytdlp(embed_url, out_path, page_url, origin=None):
     try:
         import yt_dlp
     except ImportError:
@@ -211,7 +212,8 @@ def _download_with_ytdlp(embed_url, out_path, page_url):
         # Best quality up to the cap (largest resolution <= max_height).
         "format_sort": [f"res:{SETTINGS['max_height']}"] if SETTINGS["max_height"] else [],
         "merge_output_format": "mp4",
-        "http_headers": {"Referer": page_url or embed_url, "User-Agent": DEFAULT_USER_AGENT},
+        "http_headers": {"Referer": page_url or embed_url, "User-Agent": DEFAULT_USER_AGENT,
+                         **({"Origin": origin} if origin else {})},
         "noplaylist": True,
         "retries": 10,
         "fragment_retries": 10,
@@ -266,8 +268,13 @@ def _download_builtin(embed_url, out_path, page_url):
     if not found:
         return False
     stream, referer = found
+    # yt-dlp handles a raw HLS/MP4 URL itself: parallel fragments (fast)
+    # and no ffmpeg needed. ffmpeg (sequential) is the last resort.
+    print_status("Flux trouvé par l'extracteur intégré.", "success")
+    if _download_with_ytdlp(stream, out_path, referer, origin=_origin(referer)):
+        return True
     if not check_ffmpeg_installed():
-        print_status("ffmpeg est nécessaire pour ce flux (winget install Gyan.FFmpeg).", "error")
+        print_status(f"ffmpeg permettrait un autre essai : {ffmpeg_install_command()}", "warning")
         return False
     return ffmpeg_copy(stream, out_path, referer=referer)
 
@@ -297,11 +304,21 @@ def download_part(embed_url, out_path, page_url=None):
     return False
 
 
+def ffmpeg_install_command():
+    if os.name == "nt":
+        return "winget install Gyan.FFmpeg  (puis rouvrez PowerShell)"
+    if sys.platform == "darwin":
+        return "brew install ffmpeg"
+    for tool, cmd in (("apt-get", "sudo apt install ffmpeg"), ("dnf", "sudo dnf install ffmpeg"),
+                      ("pacman", "sudo pacman -S ffmpeg"), ("zypper", "sudo zypper install ffmpeg"),
+                      ("apk", "sudo apk add ffmpeg")):
+        if shutil.which(tool):
+            return cmd
+    return "installez le paquet ffmpeg de votre distribution"
+
+
 def ffmpeg_hint():
     if check_ffmpeg_installed():
         return
-    print_status("ffmpeg n'est pas installé : il est fortement conseillé (flux HLS, fusion des parties).", "warning")
-    if os.name == "nt":
-        print(f"   {Colors.DIM}Installez-le avec : winget install Gyan.FFmpeg  (puis rouvrez PowerShell){Colors.ENDC}")
-    elif shutil.which("brew"):
-        print(f"   {Colors.DIM}Installez-le avec : brew install ffmpeg{Colors.ENDC}")
+    print_status("ffmpeg n'est pas installé : il est fortement conseillé (fusion des parties, fichiers .mp4 propres).", "warning")
+    print(f"   {Colors.DIM}Installez-le avec : {ffmpeg_install_command()}{Colors.ENDC}")

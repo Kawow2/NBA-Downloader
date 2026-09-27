@@ -23,6 +23,15 @@ pip install -r requirements.txt
 python main.py
 ```
 
+### Sous Linux / macOS
+
+```bash
+sudo apt install ffmpeg python3-venv   # Debian/Ubuntu (dnf, pacman... selon la distribution)
+./start.sh
+```
+
+`start.sh` fait la même chose que `start.ps1` (venv `.venv`, dépendances, puis `main.py`) ; le chemin par défaut se règle dans sa ligne `CHEMIN_PAR_DEFAUT=`.
+
 ## Déroulement
 
 1. **Menu** : `1` = les 10 derniers matchs du site, `2` = recherche (ex. `knicks spurs`) puis les 10 derniers résultats. On peut aussi coller directement l'URL d'un match.

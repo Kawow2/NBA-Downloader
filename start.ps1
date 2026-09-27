@@ -50,7 +50,7 @@ if (-not (Test-Path $venvPython)) {
 }
 
 # Dépendances (installées dans .venv, une seule fois)
-& $venvPython -c "import requests, bs4, tqdm, yt_dlp" 2>$null
+& $venvPython -c "import requests, bs4, tqdm, yt_dlp, curl_cffi" 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Installation des dépendances dans .venv..." -ForegroundColor Cyan
     & $venvPython -m pip install --upgrade pip
