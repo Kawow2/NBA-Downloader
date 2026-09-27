@@ -1,6 +1,7 @@
 import subprocess
 
 from src.var import print_status
+from src.utils.mp4_faststart import ensure_faststart
 
 
 def verify_video_file(path, timeout=30):
@@ -53,6 +54,9 @@ def verify_or_warn(path, episode_num):
     Returns True/False so callers can decide whether to treat the episode
     as failed (e.g. to trigger a fallback-player retry) or just warn.
     """
+    # Index at the start of the .mp4 ("faststart"), or Plex reads the whole
+    # file before playing (.ts conversions and direct downloads lacked it).
+    ensure_faststart(path)
     ok, reason = verify_video_file(path)
     if not ok:
         print_status(

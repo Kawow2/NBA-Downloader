@@ -49,6 +49,7 @@ def convert_ts_to_mp4(input_path, output_path, pre_selected_tool=None):
             "-i", input_path,
             "-c:v", "copy",
             "-c:a", "copy",
+            "-movflags", "+faststart",
             output_path
         ]
             print_status(f"Converting with FFmpeg: {os.path.basename(input_path)}", "loading")
@@ -82,6 +83,7 @@ def convert_ts_to_mp4(input_path, output_path, pre_selected_tool=None):
                             "-i", input_path,
                             "-c:v", "copy",
                             "-c:a", "copy",
+                            "-movflags", "+faststart",
                             ff_output
                         ]
                         print_status(f"AV failed - falling back to FFmpeg: {os.path.basename(input_path)}", "loading")

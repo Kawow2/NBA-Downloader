@@ -24,7 +24,7 @@ REQUIRED_MODULES = ("requests", "bs4", "tqdm", "yt_dlp", "curl_cffi", "Crypto", 
 # a command line without "anime"/"nba" is meant for.
 _ANIME_ONLY = ("--search", "--episodes", "--player", "--fast", "--mp4", "--tool", "--no-mal", "--latest")
 _NBA_ONLY = ("--quality", "--site", "--debug", "--default-dir", "--set-default-dir")
-_LAUNCHER_OPTS = ("--anime-dir", "--nba-dir", "--set-anime-dir", "--set-nba-dir")
+_LAUNCHER_OPTS = ("--anime-dir", "--nba-dir", "--set-anime-dir", "--set-nba-dir", "--faststart")
 
 USAGE = """Utilisation :
   python main.py                      menu : Anime ou NBA (+ réglages)
@@ -32,6 +32,7 @@ USAGE = """Utilisation :
   python main.py nba [options]        téléchargeur NBA (python main.py nba --help)
   python main.py --set-anime-dir DOSSIER   dossier par défaut des animes
   python main.py --set-nba-dir DOSSIER     dossier par défaut de la NBA
+  python main.py --faststart DOSSIER       optimise les .mp4 déjà téléchargés (lecture immédiate dans Plex)
   --anime-dir / --nba-dir DOSSIER     dossier pour ce lancement seulement"""
 
 
@@ -153,6 +154,7 @@ class Launcher:
             print(f"  5. NBA   : morceaux téléchargés en parallèle             : {self.get_setting('nba_threads') or 32}")
             print(f"  6. NBA   : qualité max                                   : "
                   f"{'la meilleure' if quality == 'best' else quality + 'p'}")
+            print("  7. Optimiser les .mp4 déjà téléchargés (faststart : lecture immédiate dans Plex)")
             print("  0. Retour")
             choice = _ask("Choix : ").strip()
             if choice in ("", "0", "q"):
@@ -170,6 +172,11 @@ class Launcher:
                     self.set_setting(key, int(typed))
                 else:
                     print(f"  {Colors.FAIL}Nombre invalide.{Colors.ENDC}")
+            elif choice == "7":
+                from src.utils.mp4_faststart import fix_folder
+                for category in ("anime", "nba"):
+                    if os.path.isdir(self.folder(category)):
+                        fix_folder(self.folder(category))
             elif choice == "6":
                 typed = _ask("Qualité max (480/720/1080/1440/2160/best, Entrée = 1080) : ").strip().lower() or "1080"
                 if typed in ("480", "720", "1080", "1440", "2160", "best"):
@@ -253,6 +260,10 @@ def launch():
             launcher.set_setting(f"{category}_default_dir", os.path.expanduser(overrides[opt]))
             print(f"Dossier {'des animes' if category == 'anime' else 'NBA'} : {overrides[opt]}")
     if "--set-anime-dir" in overrides or "--set-nba-dir" in overrides:
+        sys.exit(0)
+    if "--faststart" in overrides:
+        from src.utils.mp4_faststart import fix_folder
+        fix_folder(os.path.expanduser(overrides["--faststart"]))
         sys.exit(0)
 
     category = None

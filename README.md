@@ -52,6 +52,7 @@ Si Windows refuse d'exécuter le script : `Set-ExecutionPolicy -Scope CurrentUse
 | `python main.py nba [options]` | directement la NBA (`--url`, `--quality`, `--threads`... voir plus bas) |
 | `python main.py --set-anime-dir DOSSIER` | dossier par défaut des animes |
 | `python main.py --set-nba-dir DOSSIER` | dossier par défaut de la NBA |
+| `python main.py --faststart DOSSIER` | optimise les `.mp4` déjà téléchargés (voir « faststart » ci-dessous) |
 | `--anime-dir` / `--nba-dir DOSSIER` | dossier pour ce lancement seulement (c'est ce que font les variables `CHEMIN_ANIME` / `CHEMIN_NBA` de `start.sh`, `$CheminAnime` / `$CheminNBA` de `start.ps1`) |
 
 Sans `anime`/`nba`, les options propres à un seul des deux programmes (ex. `--search`, `--quality`) ou l'adresse donnée à `--url` suffisent à choisir.
@@ -67,7 +68,11 @@ Sans `anime`/`nba`, les options propres à un seul des deux programmes (ex. `--s
 | NBA : morceaux téléchargés en parallèle | 32 |
 | NBA : qualité max | 1080p |
 
-Tout est mémorisé dans `src/utils/config/config.json`.
+Tout est mémorisé dans `src/utils/config/config.json`. Le réglage `7` optimise les `.mp4` déjà présents dans les deux dossiers.
+
+### Faststart (« Web Optimized »)
+
+Chaque `.mp4` téléchargé (anime et NBA) a son index au **début** du fichier : Plex démarre la lecture tout de suite au lieu de parcourir tout le fichier. Les fichiers qui ne l'ont pas sont réécrits automatiquement à la fin du téléchargement (copie sans ré-encodage, quelques secondes à une minute selon le disque). Pour les fichiers téléchargés avant cette version : `python main.py --faststart "/mnt/plexmedia/Vidéos"` (ou `3. Réglages` → `7`).
 
 ## Serveur Plex sur un portable Linux
 

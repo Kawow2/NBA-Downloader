@@ -22,6 +22,7 @@ from src.var import Colors, DEFAULT_USER_AGENT, print_status
 from src.utils.check.check_ffmpeg_installed import check_ffmpeg_installed
 from src.utils.download.verify_video_file import verify_video_file
 from src.nba.hosts import builtin_stream, has_builtin, patch_ytdlp
+from src.utils.mp4_faststart import ensure_faststart
 
 # Download settings, set by main.py (--quality / --threads, remembered).
 # OK.ru throttles each connection, so throughput comes from fetching many
@@ -79,6 +80,7 @@ def _finish(tmp_path, out_path):
         _cleanup(tmp_path)
         return False
     os.replace(tmp_path, out_path)
+    ensure_faststart(out_path)  # host files that never went through ffmpeg
     return True
 
 
