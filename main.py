@@ -381,9 +381,16 @@ def plan_season(base_url, args, headers, interactive):
 
                 if automatic_mp4:
                     if not pre_selected_tool:
+                         # ffmpeg (C) converts several times faster than
+                         # PyAV (a Python loop over every packet): default
+                         # to it whenever it's installed.
+                         default_tool = 'ffmpeg' if check_ffmpeg_installed() else 'av'
                          while True:
-                            t = input(f"{Colors.BOLD}Tool (1=av, 2=ffmpeg): {Colors.ENDC}").strip()
-                            if t in ['1', 'av', '']:
+                            t = input(f"{Colors.BOLD}Tool (1=av, 2=ffmpeg, Enter = {default_tool}): {Colors.ENDC}").strip()
+                            if t == '':
+                                pre_selected_tool = default_tool
+                                break
+                            if t in ['1', 'av']:
                                 pre_selected_tool = 'av'
                                 break
                             elif t in ['2', 'ffmpeg']:

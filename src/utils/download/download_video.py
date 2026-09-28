@@ -63,6 +63,11 @@ def _session():
     return session
 
 
+def _speed(received, started):
+    elapsed = time.time() - started
+    return f"{received / elapsed / 1024 ** 2:.1f} Mo/s" if elapsed > 0.5 else ""
+
+
 def _fetch_segment(segment_url, headers, index, attempts=5):
     """Download one segment, retrying with a growing pause (1, 2, 4, 8 s)
     so a busy CDN under parallel requests gets time to recover."""
@@ -268,6 +273,7 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
                 # Segments are written in order as soon as they're contiguous,
                 # instead of holding the whole episode in memory until the end.
                 pending, next_index, failed = {}, 0, False
+                received, started = 0, time.time()
                 with open(temp_ts_path, 'wb') as f, \
                         ThreadPoolExecutor(max_workers=parallel_settings.segment_workers()) as executor, \
                         tqdm(total=len(segments), desc=f"📥 {random_string}", unit="segment", position=tqdm_position, leave=False) as pbar:
@@ -282,9 +288,11 @@ def download_video(video_url, save_path, use_ts_threading=False, url='',automati
                             failed = True
                             break
                         pending[index] = content
+                        received += len(content)
                         while next_index in pending:
                             f.write(pending.pop(next_index))
                             next_index += 1
+                        pbar.set_postfix_str(_speed(received, started), refresh=False)
                         pbar.update(1)
                 if failed:
                     try:

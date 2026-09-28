@@ -4,14 +4,15 @@
     segments, or byte ranges of a single-file video (Sibnet, Sendvid...);
   * parallel_episodes(): episodes of a season downloaded at the same time.
 
-Defaults 16 x 2 = 32 connections at most, like the NBA downloader.
+Defaults 32 x 2: hosts cap every connection at a few MB/s, so the speed
+comes from the number of pieces fetched at once (like the NBA downloader).
 """
 from src.utils.config.config import get_setting
 
-DEFAULT_SEGMENT_THREADS = 16
+DEFAULT_SEGMENT_THREADS = 32
 DEFAULT_PARALLEL_EPISODES = 2
 # Single-file hosts tolerate fewer simultaneous connections than HLS CDNs.
-MAX_RANGE_CONNECTIONS = 8
+MAX_RANGE_CONNECTIONS = 16
 
 
 def _int_setting(key, default):

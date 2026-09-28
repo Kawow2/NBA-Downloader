@@ -40,6 +40,11 @@ def convert_ts_to_mp4(input_path, output_path, pre_selected_tool=None):
         except Exception as e:
             print_status(f"Failed to delete existing output file: {e}", "error")
             return False, input_path
+    if not pre_selected_tool:
+        # No tool chosen (e.g. --mp4 without --tool): ffmpeg if installed,
+        # much faster than PyAV.
+        from src.utils.check.check_ffmpeg_installed import check_ffmpeg_installed
+        pre_selected_tool = 'ffmpeg' if check_ffmpeg_installed() else 'av'
     if pre_selected_tool == 'ffmpeg':
         try:
 

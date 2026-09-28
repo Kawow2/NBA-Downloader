@@ -63,7 +63,7 @@ Sans `anime`/`nba`, les options propres à un seul des deux programmes (ex. `--s
 | --- | --- |
 | Dossier des animes | demandé au 1er lancement (proposé : `~/Videos/Anime`) |
 | Dossier NBA | demandé au 1er lancement (proposé : `~/Videos/NBA`) |
-| Anime : morceaux téléchargés en parallèle par épisode | 16 |
+| Anime : morceaux téléchargés en parallèle par épisode | 32 |
 | Anime : épisodes téléchargés en même temps | 2 |
 | NBA : morceaux téléchargés en parallèle | 32 |
 | NBA : qualité max | 1080p |
@@ -97,9 +97,11 @@ Disposition conseillée (deux bibliothèques Plex de type **Séries TV**) :
 
 Par rapport au dépôt d'origine, sans rien avoir à répondre :
 
-- les segments vidéo (lecteurs HLS : Vidmoly, VOE, Filemoon…) d'un épisode se téléchargent **16 à la fois** (avant : 10, et seulement en répondant « y »), sur des connexions réutilisées, avec des nouvelles tentatives espacées, et sont écrits sur le disque au fur et à mesure (avant : tout l'épisode restait en mémoire) ;
-- les lecteurs à fichier unique (Sibnet, Sendvid…) se téléchargent sur **plusieurs connexions** à la fois (8 au plus), avec retour automatique à une seule connexion si l'hébergeur refuse ;
+- les segments vidéo (lecteurs HLS : Vidmoly, VOE, Filemoon…) d'un épisode se téléchargent **32 à la fois** (avant : 10, et seulement en répondant « y »), sur des connexions réutilisées, avec des nouvelles tentatives espacées, et sont écrits sur le disque au fur et à mesure (avant : tout l'épisode restait en mémoire) ;
+- les lecteurs à fichier unique (Sibnet, Sendvid…) se téléchargent sur **plusieurs connexions** à la fois (16 au plus), avec retour automatique à une seule connexion si l'hébergeur refuse ;
 - les épisodes d'une saison se téléchargent **2 à la fois** ;
+- la conversion `.ts` → `.mp4` utilise ffmpeg par défaut quand il est installé (plusieurs fois plus rapide que PyAV) ;
+- la barre de chaque épisode affiche le débit (Mo/s) ;
 - `Ctrl+C` arrête tout immédiatement.
 
 Sur un serveur de test qui bride chaque connexion comme les hébergeurs : épisode HLS 10,7 s → 0,9 s, fichier unique 11,9 s → 2,5 s.
