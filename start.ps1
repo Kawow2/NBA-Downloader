@@ -3,6 +3,7 @@
 # Dans PowerShell, depuis le dossier du projet :
 #     .\start.ps1
 #     .\start.ps1 nba --url "https://basketball-video.com/..."
+#     .\start.ps1 films --url "https://nakios.rent/series/87108"
 # Si Windows bloque le script : Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 #
 # Équivalent manuel :
@@ -14,10 +15,12 @@
 # Dossiers (bibliothèques Plex) pour ce lanceur, ex :
 #   $CheminAnime = "D:\Plex\Anime"
 #   $CheminNBA   = "D:\Plex\Sports\NBA"
+#   $CheminFilms = "D:\Plex"   (contient Films\ et Séries\ = 2 bibliothèques)
 # Laissés vides : les dossiers choisis dans le menu du programme (Réglages),
 # demandés la première fois que chaque catégorie est utilisée.
 $CheminAnime = ""
 $CheminNBA = ""
+$CheminFilms = ""
 
 # "Continue" : sous Windows PowerShell 5.1, "Stop" transforme la moindre
 # sortie d'erreur de python en exception.
@@ -66,6 +69,7 @@ if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
 $mainArgs = @()
 if ($CheminAnime) { $mainArgs += @("--anime-dir", $CheminAnime) }
 if ($CheminNBA) { $mainArgs += @("--nba-dir", $CheminNBA) }
+if ($CheminFilms) { $mainArgs += @("--films-dir", $CheminFilms) }
 $mainArgs += @($args)
 
 & $venvPython main.py @mainArgs

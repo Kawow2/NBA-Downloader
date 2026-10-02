@@ -1,19 +1,21 @@
-# 🎌🏀 Anime & NBA Downloader → Plex
+# 🎌🏀🎬 Anime · NBA · Films & Séries → Plex
 
 Un seul programme, un menu au démarrage :
 
 - **🎌 Anime** : le téléchargeur Anime-Sama / Nakanime de [SertraFurr/anime-sama-nakanime-downloader](https://github.com/SertraFurr/anime-sama-nakanime-downloader) (documentation plus bas), avec en plus des **téléchargements en parallèle** ;
-- **🏀 NBA** : les replays de [basketball-video.com](https://basketball-video.com) en **.mp4** rangés et nommés pour Plex.
+- **🏀 NBA** : les replays de [basketball-video.com](https://basketball-video.com) en **.mp4** rangés et nommés pour Plex ;
+- **🎬 Films & Séries** : films et séries de [nakios.rent](https://nakios.rent) en **.mp4**, rangés en bibliothèques Plex **Films** et **Séries**.
 
 Chaque catégorie a **son propre dossier** (sa bibliothèque Plex), demandé la première fois qu'on l'utilise et modifiable dans **Réglages**.
 
 ```
 ╔══════════════════════════════════════════════════════════════╗
-║                  ANIME  &  NBA  DOWNLOADER                   ║
+║            ANIME · NBA · FILMS & SÉRIES  DOWNLOADER           ║
 ╚══════════════════════════════════════════════════════════════╝
-  1. 🎌 Anime  (anime-sama, nakanime)   → /srv/plex/Anime
-  2. 🏀 NBA    (basketball-video.com)   → /srv/plex/Sports/NBA
-  3. ⚙️  Réglages (dossiers, parallélisme, qualité)
+  1. 🎌 Anime           (anime-sama, nakanime)  → /srv/plex/Anime
+  2. 🏀 NBA             (basketball-video.com)  → /srv/plex/Sports/NBA
+  3. 🎬 Films & Séries  (nakios.rent)           → /srv/plex
+  4. ⚙️  Réglages (dossiers, parallélisme, qualité)
   q. Quitter
 ```
 
@@ -47,32 +49,38 @@ Si Windows refuse d'exécuter le script : `Set-ExecutionPolicy -Scope CurrentUse
 
 | Commande | Rôle |
 | --- | --- |
-| `python main.py` | menu Anime / NBA |
+| `python main.py` | menu Anime / NBA / Films & Séries |
 | `python main.py anime [options]` | directement les animes (`--search`, `--url`, `--episodes`... voir plus bas) |
 | `python main.py nba [options]` | directement la NBA (`--url`, `--quality`, `--threads`... voir plus bas) |
+| `python main.py films [options]` | directement les films & séries (`--search`, `--url`, `--season`, `--episodes`... voir plus bas) |
 | `python main.py --set-anime-dir DOSSIER` | dossier par défaut des animes |
 | `python main.py --set-nba-dir DOSSIER` | dossier par défaut de la NBA |
+| `python main.py --set-films-dir DOSSIER` | dossier par défaut des films & séries |
 | `python main.py --faststart DOSSIER` | optimise les `.mp4` déjà téléchargés (voir « faststart » ci-dessous) |
-| `--anime-dir` / `--nba-dir DOSSIER` | dossier pour ce lancement seulement (c'est ce que font les variables `CHEMIN_ANIME` / `CHEMIN_NBA` de `start.sh`, `$CheminAnime` / `$CheminNBA` de `start.ps1`) |
+| `--anime-dir` / `--nba-dir` / `--films-dir DOSSIER` | dossier pour ce lancement seulement (c'est ce que font les variables `CHEMIN_ANIME` / `CHEMIN_NBA` / `CHEMIN_FILMS` de `start.sh`, `$CheminAnime` / `$CheminNBA` / `$CheminFilms` de `start.ps1`) |
 
-Sans `anime`/`nba`, les options propres à un seul des deux programmes (ex. `--search`, `--quality`) ou l'adresse donnée à `--url` suffisent à choisir.
+Sans `anime`/`nba`/`films`, les options propres à un seul programme (ex. `--quality`, `--season`), ou l'adresse donnée à `--url`, suffisent à choisir.
 
-## Réglages (menu `3`)
+## Réglages (menu `4`)
 
 | Réglage | Défaut |
 | --- | --- |
 | Dossier des animes | demandé au 1er lancement (proposé : `~/Videos/Anime`) |
 | Dossier NBA | demandé au 1er lancement (proposé : `~/Videos/NBA`) |
+| Dossier Films & Séries | demandé au 1er lancement (proposé : `~/Videos`, contient `Films/` et `Séries/`) |
 | Anime : morceaux téléchargés en parallèle par épisode | 32 |
 | Anime : épisodes téléchargés en même temps | 2 |
 | NBA : morceaux téléchargés en parallèle | 32 |
 | NBA : qualité max | 1080p |
+| Films : morceaux téléchargés en parallèle | 32 |
+| Films : qualité max | 1080p |
+| Films : endpoint des lecteurs (avancé) | auto |
 
-Tout est mémorisé dans `src/utils/config/config.json`. Le réglage `7` optimise les `.mp4` déjà présents dans les deux dossiers.
+Tout est mémorisé dans `src/utils/config/config.json`. Le réglage `11` optimise les `.mp4` déjà présents dans les trois dossiers.
 
 ### Faststart (« Web Optimized »)
 
-Chaque `.mp4` téléchargé (anime et NBA) a son index au **début** du fichier : Plex démarre la lecture tout de suite au lieu de parcourir tout le fichier. Les fichiers qui ne l'ont pas sont réécrits automatiquement à la fin du téléchargement (copie sans ré-encodage, quelques secondes à une minute selon le disque). Pour les fichiers téléchargés avant cette version : `python main.py --faststart "/mnt/plexmedia/Vidéos"` (ou `3. Réglages` → `7`).
+Chaque `.mp4` téléchargé (anime, NBA et films/séries) a son index au **début** du fichier : Plex démarre la lecture tout de suite au lieu de parcourir tout le fichier. Les fichiers qui ne l'ont pas sont réécrits automatiquement à la fin du téléchargement (copie sans ré-encodage, quelques secondes à une minute selon le disque). Pour les fichiers téléchargés avant cette version : `python main.py --faststart "/mnt/plexmedia/Vidéos"` (ou `4. Réglages` → `11`).
 
 La même commande **répare le son** des épisodes anime convertis par les versions précédentes (son muet ou qui grésille) : la conversion `.ts` → `.mp4` y enregistrait une fréquence audio fausse (48000 Hz au lieu de 44100 Hz, par ex.). La vraie fréquence est retrouvée d'après la durée, et les données audio sont gardées telles quelles, sans ré-encodage.
 
@@ -141,6 +149,58 @@ Créez une bibliothèque Plex de type **Séries TV** sur le dossier qui **contie
 
 Si aucun lecteur n'est détecté sur une page (changement de mise en page du site), relancez avec `--debug` : les pages HTML sauvegardées dans `./debug` permettent d'adapter `src/nba/site.py`.
 Si le site est derrière Cloudflare, le programme demande le cookie `cf_clearance` et le User-Agent du navigateur. Si un hébergeur ne marche plus, mettez yt-dlp à jour : `.venv/bin/python -m pip install -U "yt-dlp[default,curl-cffi]"` (Windows : `.\.venv\Scripts\python.exe -m pip ...`).
+
+
+---
+
+# 🎬 Films & Séries
+
+Films et séries depuis **[nakios.rent](https://nakios.rent)** (l'API du site est au format TMDB), en `.mp4` prêts pour Plex. Le téléchargement réutilise tout le moteur de la partie NBA (extracteurs VOE / Uqload / Filemoon / Vidmoly / Sibnet…, yt-dlp, multi-connexions, fusion, faststart).
+
+## Déroulement
+
+1. **Menu** : `1` = rechercher un film ou une série. On peut aussi coller directement une URL `nakios.rent` (`.../series/<id>` ou `.../film/<id>`).
+2. **Résultat** : choisir le numéro ; chaque ligne indique **Film** ou **Série** et l'année.
+3. **Série** : choisir la/les **saison(s)** (ex. `1`, `1-3`, Entrée = toutes), puis les **épisodes** (ex. `1-5`, `1,3,5`, Entrée = tous).
+4. **Chemin** : Entrée = dossier Films & Séries, ou un autre chemin.
+5. **Téléchargement** en `.mp4` : le programme récupère les lecteurs du média et prend le **premier qui fonctionne** (les autres servent de secours). Les fichiers déjà présents sont ignorés ; relancer reprend ce qui manque.
+
+## Organisation pour Plex
+
+Le dossier choisi est le **parent** de deux bibliothèques :
+
+```
+<dossier>/Films/Inception (2010)/Inception (2010).mp4
+<dossier>/Séries/Chernobyl (2019)/Season 01/Chernobyl (2019) - S01E03 - Open Wide, O Earth.mp4
+```
+
+Créez une bibliothèque Plex **Films** (agent « Films ») sur `<dossier>/Films` et une bibliothèque **Séries TV** sur `<dossier>/Séries`.
+
+## Options (`python main.py films ...`)
+
+| Option | Rôle |
+| --- | --- |
+| `--search "<titre>"` | recherche directe |
+| `--url <URL>` | film / série directement (`.../series/<id>`, `.../film/<id>`) |
+| `--season <N>` | saison(s) d'une série (ex. `1`, `1-3`, `all`) |
+| `--episodes <N>` | épisode(s) (ex. `1-5`, `1,3,5`, `all`) |
+| `--dest <chemin>` | dossier de destination sans poser la question |
+| `--quality 720\|1080\|1440\|2160\|best` | qualité max (défaut 1080p, mémorisée) |
+| `--threads <N>` | morceaux/connexions en parallèle (défaut 32, mémorisé) |
+| `--site <URL>` | si le site change de domaine (mémorisé) |
+| `--profile-id <id>` / `--cookie "<cookie>"` | en-tête `x-profile-id` / cookie de session, si l'API l'exige (mémorisés) |
+| `--sources-path <gabarit>` | endpoint des lecteurs, ex. `/api/movie/{id}/sources` (mémorisé) |
+| `--debug` | enregistre les réponses de l'API dans `./debug` |
+
+### Si « aucun lecteur trouvé »
+
+La **recherche**, les **détails** et la **liste des saisons/épisodes** suivent l'API TMDB (trouvées automatiquement). En revanche, l'endpoint qui renvoie les **lecteurs vidéo** est propre au site : plusieurs chemins courants sont essayés, mais s'ils échouent, indiquez le bon :
+
+1. Ouvrez un film / un épisode sur le site, `F12 → onglet Réseau`, lancez la **lecture**.
+2. Repérez la requête `/api/...` dont la réponse contient les lecteurs (URL `voe` / `uqload` / `filemoon`… ou un `.m3u8` / `.mp4`).
+3. `4. Réglages` → `10` (ou `--sources-path`), en remplaçant l'id par `{id}` (et, pour les séries, la saison / l'épisode par `{season}` / `{episode}`). Ex. `/api/movie/{id}/sources`, `/api/tv/{id}/season/{season}/episode/{episode}/sources`.
+
+Si l'API exige une session (profil « à la Netflix », `credentials: include`), copiez l'en-tête `cookie` d'une requête `/api/...` dans `--cookie` (ou le réglage). `--debug` enregistre les réponses dans `./debug` pour trouver le bon chemin.
 
 
 ---
