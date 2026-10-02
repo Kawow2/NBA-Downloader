@@ -14,10 +14,12 @@
 
 # Folders (Plex libraries) for this launcher, e.g.
 #   CHEMIN_ANIME="/srv/plex/Anime"   CHEMIN_NBA="/srv/plex/NBA"
+#   CHEMIN_MEDIA="/srv/plex/Films"   (films & séries)
 # Empty: the folders chosen in the program's menu (Réglages), asked the
 # first time each category is used.
 CHEMIN_ANIME=""
 CHEMIN_NBA=""
+CHEMIN_MEDIA=""
 
 cd "$(dirname "$0")" || exit 1
 
@@ -72,6 +74,7 @@ fi
 ARGS=()
 [ -n "$CHEMIN_ANIME" ] && ARGS+=(--anime-dir "$CHEMIN_ANIME")
 [ -n "$CHEMIN_NBA" ] && ARGS+=(--nba-dir "$CHEMIN_NBA")
+[ -n "$CHEMIN_MEDIA" ] && ARGS+=(--media-dir "$CHEMIN_MEDIA")
 if [ -n "$START_SH_IN_TMUX" ]; then
     "$VENV_PY" main.py "${ARGS[@]}" "$@"
     echo

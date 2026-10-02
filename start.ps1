@@ -14,10 +14,12 @@
 # Dossiers (bibliothèques Plex) pour ce lanceur, ex :
 #   $CheminAnime = "D:\Plex\Anime"
 #   $CheminNBA   = "D:\Plex\Sports\NBA"
+#   $CheminMedia = "D:\Plex\Films"
 # Laissés vides : les dossiers choisis dans le menu du programme (Réglages),
 # demandés la première fois que chaque catégorie est utilisée.
 $CheminAnime = ""
 $CheminNBA = ""
+$CheminMedia = ""
 
 # "Continue" : sous Windows PowerShell 5.1, "Stop" transforme la moindre
 # sortie d'erreur de python en exception.
@@ -66,6 +68,7 @@ if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
 $mainArgs = @()
 if ($CheminAnime) { $mainArgs += @("--anime-dir", $CheminAnime) }
 if ($CheminNBA) { $mainArgs += @("--nba-dir", $CheminNBA) }
+if ($CheminMedia) { $mainArgs += @("--media-dir", $CheminMedia) }
 $mainArgs += @($args)
 
 & $venvPython main.py @mainArgs

@@ -1,19 +1,21 @@
-# 🎌🏀 Anime & NBA Downloader → Plex
+# 🎌🏀🎬 Anime & NBA & Films/Séries Downloader → Plex
 
 Un seul programme, un menu au démarrage :
 
 - **🎌 Anime** : le téléchargeur Anime-Sama / Nakanime de [SertraFurr/anime-sama-nakanime-downloader](https://github.com/SertraFurr/anime-sama-nakanime-downloader) (documentation plus bas), avec en plus des **téléchargements en parallèle** ;
-- **🏀 NBA** : les replays de [basketball-video.com](https://basketball-video.com) en **.mp4** rangés et nommés pour Plex.
+- **🏀 NBA** : les replays de [basketball-video.com](https://basketball-video.com) en **.mp4** rangés et nommés pour Plex ;
+- **🎬 Films & Séries** : films et séries depuis des **sources enfichables** — pour l'instant [Internet Archive](https://archive.org) (contenus libres de droits), avec une **recherche dans toutes les sources** à la fois. Voir [« ajouter une source »](#ajouter-une-source) pour en brancher d'autres.
 
 Chaque catégorie a **son propre dossier** (sa bibliothèque Plex), demandé la première fois qu'on l'utilise et modifiable dans **Réglages**.
 
 ```
 ╔══════════════════════════════════════════════════════════════╗
-║                  ANIME  &  NBA  DOWNLOADER                   ║
+║            ANIME  &  NBA  &  FILMS/SÉRIES  DOWNLOADER         ║
 ╚══════════════════════════════════════════════════════════════╝
-  1. 🎌 Anime  (anime-sama, nakanime)   → /srv/plex/Anime
-  2. 🏀 NBA    (basketball-video.com)   → /srv/plex/Sports/NBA
-  3. ⚙️  Réglages (dossiers, parallélisme, qualité)
+  1. 🎌 Anime           (anime-sama, nakanime)   → /srv/plex/Anime
+  2. 🏀 NBA             (basketball-video.com)   → /srv/plex/Sports/NBA
+  3. 🎬 Films & Séries  (Internet Archive…)      → /srv/plex/Films
+  4. ⚙️  Réglages (dossiers, parallélisme, qualité)
   q. Quitter
 ```
 
@@ -47,15 +49,17 @@ Si Windows refuse d'exécuter le script : `Set-ExecutionPolicy -Scope CurrentUse
 
 | Commande | Rôle |
 | --- | --- |
-| `python main.py` | menu Anime / NBA |
+| `python main.py` | menu Anime / NBA / Films & Séries |
 | `python main.py anime [options]` | directement les animes (`--search`, `--url`, `--episodes`... voir plus bas) |
 | `python main.py nba [options]` | directement la NBA (`--url`, `--quality`, `--threads`... voir plus bas) |
+| `python main.py media [options]` | directement les films & séries (`--search`, `--all`, `--source`, `--url`... voir plus bas) |
 | `python main.py --set-anime-dir DOSSIER` | dossier par défaut des animes |
 | `python main.py --set-nba-dir DOSSIER` | dossier par défaut de la NBA |
+| `python main.py --set-media-dir DOSSIER` | dossier par défaut des films & séries |
 | `python main.py --faststart DOSSIER` | optimise les `.mp4` déjà téléchargés (voir « faststart » ci-dessous) |
-| `--anime-dir` / `--nba-dir DOSSIER` | dossier pour ce lancement seulement (c'est ce que font les variables `CHEMIN_ANIME` / `CHEMIN_NBA` de `start.sh`, `$CheminAnime` / `$CheminNBA` de `start.ps1`) |
+| `--anime-dir` / `--nba-dir` / `--media-dir DOSSIER` | dossier pour ce lancement seulement (variables `CHEMIN_ANIME` / `CHEMIN_NBA` / `CHEMIN_MEDIA` de `start.sh`, `$CheminAnime` / `$CheminNBA` / `$CheminMedia` de `start.ps1`) |
 
-Sans `anime`/`nba`, les options propres à un seul des deux programmes (ex. `--search`, `--quality`) ou l'adresse donnée à `--url` suffisent à choisir.
+Sans `anime`/`nba`/`media`, les options propres à un seul des programmes (ex. `--player` pour l'anime, `--site` pour la NBA, `--source`/`--all` pour les films & séries) ou l'adresse donnée à `--url` suffisent à choisir.
 
 ## Réglages (menu `3`)
 
@@ -63,12 +67,15 @@ Sans `anime`/`nba`, les options propres à un seul des deux programmes (ex. `--s
 | --- | --- |
 | Dossier des animes | demandé au 1er lancement (proposé : `~/Videos/Anime`) |
 | Dossier NBA | demandé au 1er lancement (proposé : `~/Videos/NBA`) |
+| Dossier Films & Séries | demandé au 1er lancement (proposé : `~/Videos/Films & Séries`) |
 | Anime : morceaux téléchargés en parallèle par épisode | 32 |
 | Anime : épisodes téléchargés en même temps | 2 |
 | NBA : morceaux téléchargés en parallèle | 32 |
 | NBA : qualité max | 1080p |
+| Films & Séries : connexions en parallèle par fichier | 16 |
+| Films & Séries : qualité max préférée | la meilleure |
 
-Tout est mémorisé dans `src/utils/config/config.json`. Le réglage `7` optimise les `.mp4` déjà présents dans les deux dossiers.
+Tout est mémorisé dans `src/utils/config/config.json`. Le dernier réglage optimise les `.mp4` déjà présents dans les trois dossiers.
 
 ### Faststart (« Web Optimized »)
 
@@ -105,6 +112,69 @@ Par rapport au dépôt d'origine, sans rien avoir à répondre :
 - `Ctrl+C` arrête tout immédiatement.
 
 Sur un serveur de test qui bride chaque connexion comme les hébergeurs : épisode HLS 10,7 s → 0,9 s, fichier unique 11,9 s → 2,5 s.
+
+---
+
+# 🎬 Films & Séries
+
+Télécharge des films et des séries depuis des **sources enfichables** et les range pour Plex. Une seule source est livrée pour l'instant — **[Internet Archive](https://archive.org)** (films et séries libres de droits, via son API publique) — mais le programme est construit pour en ajouter d'autres sans rien changer au reste (menu, recherche, nommage Plex).
+
+## Déroulement
+
+1. **Menu** : `1` = rechercher dans une source (on choisit la source d'abord), `2` = **rechercher dans toutes les sources** et agréger les résultats. On peut aussi coller directement un identifiant ou une URL (ex. `https://archive.org/details/...`).
+2. **Résultats** : chaque ligne montre le titre, l'année et `[la source]`. On choisit un numéro.
+3. **Film ou série** : détecté automatiquement d'après les fichiers (un seul film → téléchargé tel quel ; plusieurs épisodes → liste des épisodes, on choisit `1-3,5` ou Entrée pour tous).
+4. **Chemin** : Entrée = dossier Films & Séries, ou un autre chemin (proposé ensuite comme défaut).
+5. **Téléchargement** : chaque fichier est pris sur **plusieurs connexions à la fois** (comme la NBA), avec repli sur une seule connexion si le serveur refuse ; les `.mp4` sont rendus *faststart* pour que Plex démarre tout de suite.
+
+## Organisation pour Plex
+
+Films et séries ont besoin de bibliothèques Plex différentes : chacun va donc dans son sous-dossier.
+
+```
+<dossier Films & Séries>/
+    Films/
+        Nosferatu (1922)/Nosferatu (1922).mp4
+    Séries/
+        Ma Série (1960)/Season 01/Ma Série (1960) - S01E02 - Le titre.mp4
+```
+
+Créez une bibliothèque Plex **Films** sur `…/Films` et une bibliothèque **Séries TV** sur `…/Séries`.
+
+## Options (`python main.py media ...`)
+
+| Option | Rôle |
+| --- | --- |
+| `--search "titre"` | recherche |
+| `--all` | cherche dans **toutes** les sources et agrège (avec `--search`) |
+| `--source archive` | choisit la source (clé ou nom). Par défaut : la première, ou toutes avec `--all` |
+| `--url <id/URL>` | télécharge directement cet élément (ex. `archive.org/details/...`) |
+| `--episodes "1-3,5"` | épisodes d'une série (`all` pour tous) |
+| `--dest <chemin>` | dossier de destination sans poser la question |
+| `--threads <N>` | connexions en parallèle par fichier (défaut 16, mémorisé) |
+| `--quality 480\|720\|1080\|1440\|2160\|best` | qualité max préférée (défaut `best`, mémorisée) |
+| `--list-sources` | liste les sources disponibles puis quitte |
+
+Exemples :
+
+```bash
+python main.py media --search "night of the living dead"
+python main.py media --all --search "charlie chaplin"
+python main.py media --url "https://archive.org/details/CC_1916_07_10_The_Vagabond" --dest "/srv/plex/Films"
+```
+
+## Ajouter une source
+
+Les sources vivent dans `src/media/sources/`. Pour en brancher une :
+
+1. Créez un fichier (ex. `src/media/sources/ma_source.py`) avec une classe qui hérite de `Source` (voir `src/media/sources/base.py`) :
+   - `key` / `label` : identifiant court et nom affiché ;
+   - `search(query, limit)` → liste de `SearchResult` ;
+   - `fetch(result)` → un `MediaItem` (un film via `videos`, ou une série via `episodes`, chaque vidéo étant une liste de `VideoFile` de qualités/formats différents) ;
+   - `matches_url(text)` (optionnel) → `True` si la source sait traiter une URL collée.
+2. Ajoutez la classe à `_SOURCE_CLASSES` dans `src/media/sources/__init__.py`.
+
+Le menu, l'option « toutes les sources » et le nommage Plex la prennent en compte automatiquement — il n'y a rien d'autre à modifier. `src/media/sources/internet_archive.py` sert d'exemple complet (recherche, détection film/série, choix de la meilleure qualité).
 
 ---
 

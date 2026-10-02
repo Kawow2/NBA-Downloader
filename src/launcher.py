@@ -20,20 +20,30 @@ ANIME_DIR_ENV = "ANIME_DEFAULT_DIR"  # read by src/utils/get/get_save_directory.
 
 REQUIRED_MODULES = ("requests", "bs4", "tqdm", "yt_dlp", "curl_cffi", "Crypto", "av", "cloudscraper")
 
-# Options that only exist in one of the two programs: they tell which one
-# a command line without "anime"/"nba" is meant for.
+# Options that only exist in one of the programs: they tell which one a
+# command line without "anime"/"nba"/"media" is meant for. Media is checked
+# first in guess_category() because it shares --search with anime.
 _ANIME_ONLY = ("--search", "--episodes", "--player", "--fast", "--mp4", "--tool", "--no-mal", "--latest")
-_NBA_ONLY = ("--quality", "--site", "--debug", "--default-dir", "--set-default-dir")
-_LAUNCHER_OPTS = ("--anime-dir", "--nba-dir", "--set-anime-dir", "--set-nba-dir", "--faststart")
+_NBA_ONLY = ("--site", "--debug", "--set-default-dir")
+_MEDIA_ONLY = ("--source", "--all", "--list-sources")
+_LAUNCHER_OPTS = ("--anime-dir", "--nba-dir", "--media-dir",
+                  "--set-anime-dir", "--set-nba-dir", "--set-media-dir", "--faststart")
+
+# Per-category labels/examples used by the folder prompts.
+_CAT_LABEL = {"anime": "des animes", "nba": "de la NBA", "media": "des films et séries"}
+_CAT_TITLE = {"anime": "ANIME", "nba": "NBA", "media": "FILMS & SÉRIES"}
+_CAT_EXAMPLE = {"anime": "/srv/plex/Anime", "nba": "/srv/plex/Sports/NBA", "media": "/srv/plex/Films"}
 
 USAGE = """Utilisation :
-  python main.py                      menu : Anime ou NBA (+ réglages)
+  python main.py                      menu : Anime, NBA ou Films & Séries (+ réglages)
   python main.py anime [options]      téléchargeur d'animes (python main.py anime --help)
   python main.py nba [options]        téléchargeur NBA (python main.py nba --help)
+  python main.py media [options]      téléchargeur films & séries (python main.py media --help)
   python main.py --set-anime-dir DOSSIER   dossier par défaut des animes
   python main.py --set-nba-dir DOSSIER     dossier par défaut de la NBA
+  python main.py --set-media-dir DOSSIER   dossier par défaut des films & séries
   python main.py --faststart DOSSIER       optimise/répare les .mp4 déjà téléchargés (lecture immédiate dans Plex, son)
-  --anime-dir / --nba-dir DOSSIER     dossier pour ce lancement seulement"""
+  --anime-dir / --nba-dir / --media-dir DOSSIER   dossier pour ce lancement seulement"""
 
 
 def ensure_requirements():
@@ -57,7 +67,8 @@ def ensure_requirements():
 
 
 def fallback_dir(category):
-    return os.path.join(os.path.expanduser("~"), "Videos", "Anime" if category == "anime" else "NBA")
+    names = {"anime": "Anime", "nba": "NBA", "media": "Films & Séries"}
+    return os.path.join(os.path.expanduser("~"), "Videos", names.get(category, category))
 
 
 def _split_args(argv):
@@ -82,8 +93,11 @@ def _split_args(argv):
 
 
 def guess_category(args):
-    """"anime"/"nba" from options only one program has, or from --url."""
+    """"anime"/"nba"/"media" from options only one program has, or from
+    --url. Media is tested before anime because they share --search."""
     names = {a.partition("=")[0] for a in args if a.startswith("--")}
+    if names & set(_MEDIA_ONLY):
+        return "media"
     if names & set(_ANIME_ONLY):
         return "anime"
     if names & set(_NBA_ONLY):
@@ -95,6 +109,8 @@ def guess_category(args):
             return "anime"
         if "basketball-video" in url:
             return "nba"
+        if "archive.org" in url:
+            return "media"
     return None
 
 
@@ -119,13 +135,13 @@ class Launcher:
     def ask_folder(self, category, first_time=False):
         from src.var import Colors
         from src.utils.check.check_folder import folder_problem
-        label = "des animes" if category == "anime" else "de la NBA"
+        label = _CAT_LABEL.get(category, category)
         current = self.folder(category)
         if first_time:
-            print(f"\n{Colors.BOLD}{Colors.HEADER}{'─' * 64}\n📁 PREMIER LANCEMENT {'ANIME' if category == 'anime' else 'NBA'} : "
+            print(f"\n{Colors.BOLD}{Colors.HEADER}{'─' * 64}\n📁 PREMIER LANCEMENT {_CAT_TITLE.get(category, category.upper())} : "
                   f"OÙ RANGER LES VIDÉOS ?\n{'─' * 64}{Colors.ENDC}")
             print(f"  Tapez le chemin complet du dossier (celui de la bibliothèque Plex), ex. "
-                  f"{'/srv/plex/Anime' if category == 'anime' else '/srv/plex/Sports/NBA'}")
+                  f"{_CAT_EXAMPLE.get(category, '/srv/plex/Media')}")
             print(f"  ou Entrée pour {current}. Modifiable ensuite dans Réglages.")
         if f"--{category}-dir" in self.overrides:
             print(f"  {Colors.WARNING}Ce lancement utilise --{category}-dir {self.overrides[f'--{category}-dir']} "
@@ -146,15 +162,20 @@ class Launcher:
         from src.utils.download import parallel_settings as par
         while True:
             quality = str(self.get_setting("nba_quality") or "1080")
+            media_quality = str(self.get_setting("media_quality") or "best")
             print(f"\n{Colors.BOLD}{Colors.HEADER}⚙️  RÉGLAGES{Colors.ENDC}")
-            print(f"  1. Dossier des animes        : {self.folder('anime')}")
-            print(f"  2. Dossier NBA               : {self.folder('nba')}")
-            print(f"  3. Anime : morceaux téléchargés en parallèle par épisode : {par.segment_threads()}")
-            print(f"  4. Anime : épisodes téléchargés en même temps            : {par.parallel_episodes()}")
-            print(f"  5. NBA   : morceaux téléchargés en parallèle             : {self.get_setting('nba_threads') or 32}")
-            print(f"  6. NBA   : qualité max                                   : "
+            print(f"  1. Dossier des animes          : {self.folder('anime')}")
+            print(f"  2. Dossier NBA                 : {self.folder('nba')}")
+            print(f"  3. Dossier Films & Séries      : {self.folder('media')}")
+            print(f"  4. Anime : morceaux téléchargés en parallèle par épisode : {par.segment_threads()}")
+            print(f"  5. Anime : épisodes téléchargés en même temps            : {par.parallel_episodes()}")
+            print(f"  6. NBA   : morceaux téléchargés en parallèle             : {self.get_setting('nba_threads') or 32}")
+            print(f"  7. NBA   : qualité max                                   : "
                   f"{'la meilleure' if quality == 'best' else quality + 'p'}")
-            print("  7. Optimiser/réparer les .mp4 déjà téléchargés (lecture immédiate dans Plex, son cassé)")
+            print(f"  8. Films & Séries : connexions en parallèle par fichier  : {self.get_setting('media_threads') or 16}")
+            print(f"  9. Films & Séries : qualité max préférée                 : "
+                  f"{'la meilleure' if media_quality == 'best' else media_quality + 'p'}")
+            print(" 10. Optimiser/réparer les .mp4 déjà téléchargés (lecture immédiate dans Plex, son cassé)")
             print("  0. Retour")
             choice = _ask("Choix : ").strip()
             if choice in ("", "0", "q"):
@@ -163,24 +184,29 @@ class Launcher:
                 self.ask_folder("anime")
             elif choice == "2":
                 self.ask_folder("nba")
-            elif choice in ("3", "4", "5"):
-                key, default, top = {"3": ("anime_threads", par.DEFAULT_SEGMENT_THREADS, 64),
-                                     "4": ("anime_parallel_episodes", par.DEFAULT_PARALLEL_EPISODES, 8),
-                                     "5": ("nba_threads", 32, 128)}[choice]
+            elif choice == "3":
+                self.ask_folder("media")
+            elif choice in ("4", "5", "6", "8"):
+                key, default, top = {"4": ("anime_threads", par.DEFAULT_SEGMENT_THREADS, 64),
+                                     "5": ("anime_parallel_episodes", par.DEFAULT_PARALLEL_EPISODES, 8),
+                                     "6": ("nba_threads", 32, 128),
+                                     "8": ("media_threads", 16, 16)}[choice]
                 typed = _ask(f"Nombre (1-{top}, Entrée = {default}) : ").strip() or str(default)
                 if typed.isdigit() and 1 <= int(typed) <= top:
                     self.set_setting(key, int(typed))
                 else:
                     print(f"  {Colors.FAIL}Nombre invalide.{Colors.ENDC}")
-            elif choice == "7":
+            elif choice == "10":
                 from src.utils.mp4_faststart import fix_folder
-                for category in ("anime", "nba"):
+                for category in ("anime", "nba", "media"):
                     if os.path.isdir(self.folder(category)):
                         fix_folder(self.folder(category))
-            elif choice == "6":
-                typed = _ask("Qualité max (480/720/1080/1440/2160/best, Entrée = 1080) : ").strip().lower() or "1080"
+            elif choice in ("7", "9"):
+                key = "nba_quality" if choice == "7" else "media_quality"
+                default = "1080" if choice == "7" else "best"
+                typed = _ask(f"Qualité max (480/720/1080/1440/2160/best, Entrée = {default}) : ").strip().lower() or default
                 if typed in ("480", "720", "1080", "1440", "2160", "best"):
-                    self.set_setting("nba_quality", typed)
+                    self.set_setting(key, typed)
                 else:
                     print(f"  {Colors.FAIL}Valeur invalide.{Colors.ENDC}")
 
@@ -192,14 +218,17 @@ class Launcher:
             print(f"\n{Colors.HEADER}{Colors.BOLD}╔{'═' * w}╗\n║{'ANIME  &  NBA  DOWNLOADER'.center(w)}║\n╚{'═' * w}╝{Colors.ENDC}")
             print(f"  1. 🎌 Anime  {Colors.DIM}(anime-sama, nakanime)   → {self.folder('anime')}{Colors.ENDC}")
             print(f"  2. 🏀 NBA    {Colors.DIM}(basketball-video.com)   → {self.folder('nba')}{Colors.ENDC}")
-            print(f"  3. ⚙️  Réglages {Colors.DIM}(dossiers, parallélisme, qualité){Colors.ENDC}")
+            print(f"  3. 🎬 Films & Séries {Colors.DIM}(Internet Archive…) → {self.folder('media')}{Colors.ENDC}")
+            print(f"  4. ⚙️  Réglages {Colors.DIM}(dossiers, parallélisme, qualité){Colors.ENDC}")
             print("  q. Quitter")
             choice = _ask("Choix : ").strip().lower()
             if choice in ("1", "a", "anime"):
                 return "anime"
             if choice in ("2", "n", "nba"):
                 return "nba"
-            if choice == "3":
+            if choice in ("3", "m", "media", "films"):
+                return "media"
+            if choice == "4":
                 self.settings()
             elif choice in ("q", "quit", "exit"):
                 sys.exit(0)
@@ -209,8 +238,11 @@ class Launcher:
         if not self.configured_dir(category) and sys.stdin.isatty():
             self.ask_folder(category, first_time=True)
         folder = self.folder(category)
-        if category == "nba":
-            from src.nba import app
+        if category in ("nba", "media"):
+            if category == "nba":
+                from src.nba import app
+            else:
+                from src.media import app
             if "--default-dir" not in [a.partition("=")[0] for a in args]:
                 args = args + ["--default-dir", folder]
             app.run(args)
@@ -255,11 +287,12 @@ def launch():
         sys.exit(0)
 
     launcher = Launcher(overrides)
-    for opt, category in (("--set-anime-dir", "anime"), ("--set-nba-dir", "nba")):
+    set_opts = (("--set-anime-dir", "anime"), ("--set-nba-dir", "nba"), ("--set-media-dir", "media"))
+    for opt, category in set_opts:
         if opt in overrides:
             launcher.set_setting(f"{category}_default_dir", os.path.expanduser(overrides[opt]))
-            print(f"Dossier {'des animes' if category == 'anime' else 'NBA'} : {overrides[opt]}")
-    if "--set-anime-dir" in overrides or "--set-nba-dir" in overrides:
+            print(f"Dossier {_CAT_LABEL.get(category, category)} : {overrides[opt]}")
+    if any(opt in overrides for opt, _ in set_opts):
         sys.exit(0)
     if "--faststart" in overrides:
         from src.utils.mp4_faststart import fix_folder
@@ -267,7 +300,7 @@ def launch():
         sys.exit(0)
 
     category = None
-    if args and args[0].lower() in ("anime", "nba"):
+    if args and args[0].lower() in ("anime", "nba", "media"):
         category = args.pop(0).lower()
     elif args:
         category = guess_category(args)
