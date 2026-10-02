@@ -188,9 +188,20 @@ Créez une bibliothèque Plex **Films** (agent « Films ») sur `<dossier>/Films
 | `--quality 720\|1080\|1440\|2160\|best` | qualité max (défaut 1080p, mémorisée) |
 | `--threads <N>` | morceaux/connexions en parallèle (défaut 32, mémorisé) |
 | `--site <URL>` | si le site change de domaine (mémorisé) |
-| `--profile-id <id>` / `--cookie "<cookie>"` | en-tête `x-profile-id` / cookie de session, si l'API l'exige (mémorisés) |
+| `--cookie "<cookie>"` / `--user-agent "<ua>"` | cookie de session et User-Agent du navigateur (mémorisés) — voir ci-dessous |
+| `--profile-id <id>` | valeur de l'en-tête `x-profile-id` (mémorisée) |
 | `--sources-path <gabarit>` | endpoint des lecteurs, ex. `/api/movie/{id}/sources` (mémorisé) |
 | `--debug` | enregistre les réponses de l'API dans `./debug` |
+
+### Cookie de session (Cloudflare)
+
+Le site est derrière **Cloudflare** et son API n'ouvre qu'avec une **session** (le `credentials: include` du site). Au premier lancement, le programme **demande le cookie** et le mémorise dans `config.json` (non versionné) :
+
+1. Sur le site dans **ton** navigateur (même machine que le programme), `F12 → Réseau` → une requête `/api/…` → en-tête **`cookie`** → copie toute la valeur.
+2. `F12 → Console` → tape `navigator.userAgent` → copie le résultat.
+3. Colle les deux quand le programme les demande (ou passe-les avec `--cookie "…" --user-agent "…"`).
+
+Le cookie `cf_clearance` est lié à **ton IP et à ton navigateur** et **expire** au bout de quelques jours : quand l'API recommence à répondre du HTML, reprends un cookie frais (le programme le redemande). C'est un secret : il reste en local, il n'est jamais commité.
 
 ### Si « aucun lecteur trouvé »
 
@@ -200,7 +211,7 @@ La **recherche**, les **détails** et la **liste des saisons/épisodes** suivent
 2. Repérez la requête `/api/...` dont la réponse contient les lecteurs (URL `voe` / `uqload` / `filemoon`… ou un `.m3u8` / `.mp4`).
 3. `4. Réglages` → `10` (ou `--sources-path`), en remplaçant l'id par `{id}` (et, pour les séries, la saison / l'épisode par `{season}` / `{episode}`). Ex. `/api/movie/{id}/sources`, `/api/tv/{id}/season/{season}/episode/{episode}/sources`.
 
-Si l'API exige une session (profil « à la Netflix », `credentials: include`), copiez l'en-tête `cookie` d'une requête `/api/...` dans `--cookie` (ou le réglage). `--debug` enregistre les réponses dans `./debug` pour trouver le bon chemin.
+(Si c'est la **recherche** elle-même qui échoue avec « cookie de session requis », voir « Cookie de session » ci-dessus.) `--debug` enregistre les réponses dans `./debug` pour trouver le bon chemin.
 
 
 ---

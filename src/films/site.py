@@ -239,6 +239,23 @@ class Site:
         except OSError:
             pass
 
+    def set_credentials(self, cookie=None, user_agent=None):
+        """Mémorise le cookie de session / le User-Agent (config.json, non
+        versionné) et reconstruit la session HTTP avec."""
+        if cookie is not None:
+            set_setting("films_cookie", cookie.strip())
+        if user_agent:
+            set_setting("films_user_agent", user_agent.strip())
+        self.session = self._make_session()
+
+    def probe_session(self):
+        """Teste un appel API. (True, None) si l'API répond du JSON ; sinon
+        (False, raison) — typiquement un cookie de session manquant/expiré."""
+        data = self._get_json("/api/search/multi", params={"query": "a", "page": 1})
+        if data is not None:
+            return True, None
+        return False, self.last_error
+
     def _first_json(self, paths, **fmt):
         """Premier endpoint candidat qui répond un JSON non vide."""
         for template in paths:

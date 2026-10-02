@@ -83,6 +83,45 @@ def parse_selection(text, available):
     return picked
 
 
+# ---------------------------------------------------------------- session
+def ensure_session(site, interactive):
+    """S'assure que l'API répond du JSON. Sinon, en interactif, demande le
+    cookie de session (+ User-Agent) et réessaie : le site est derrière
+    Cloudflare et exige une session (le « credentials: include » du site).
+    Le cookie est mémorisé dans config.json (non versionné) ; à refaire
+    seulement quand il expire."""
+    ok, reason = site.probe_session()
+    if ok:
+        return True
+    if not interactive:
+        if reason:
+            print_status(reason, "error")
+        print_status("Passe le cookie avec --cookie \"...\" (et --user-agent \"...\").", "info")
+        return False
+    print_status(reason or "L'API exige une session.", "warning")
+    print_status(f"{site.host} est derrière Cloudflare et demande une session — à récupérer dans TON "
+                 "navigateur (même machine que ce programme) :", "info")
+    while True:
+        print(f"   {Colors.DIM}1. F12 → onglet Réseau → une requête /api/… → en-tête « cookie » "
+              f"(copie TOUTE la valeur).{Colors.ENDC}")
+        cookie = ask("Cookie (Entrée = annuler) : ")
+        if not cookie:
+            return False
+        print(f"   {Colors.DIM}2. F12 → Console → tape  navigator.userAgent  et copie le résultat "
+              f"(sans les guillemets).{Colors.ENDC}")
+        ua = ask("User-Agent (Entrée = garder l'actuel) : ")
+        site.set_credentials(cookie=cookie, user_agent=ua or None)
+        ok, reason = site.probe_session()
+        if ok:
+            print_status("Session OK ✅ — mémorisée (à refaire seulement quand elle expirera).", "success")
+            return True
+        print_status(f"Toujours bloqué : {reason}", "error")
+        print_status("Le cookie est lié à ton IP et à ton navigateur et il expire : reprends un cookie "
+                     "FRAIS et le User-Agent du MÊME navigateur.", "info")
+        if not yes("Réessayer ?", default=True):
+            return False
+
+
 # ---------------------------------------------------------------- recherche
 def choose_media(site):
     while True:
@@ -285,6 +324,7 @@ def main():
     parser.add_argument("--site", help="URL du site si le domaine change (mémorisée)")
     parser.add_argument("--profile-id", help="Valeur de l'en-tête x-profile-id (mémorisée)")
     parser.add_argument("--cookie", help="En-tête Cookie de session, si l'API l'exige (mémorisé)")
+    parser.add_argument("--user-agent", help="User-Agent du navigateur ayant obtenu le cookie (mémorisé)")
     parser.add_argument("--sources-path", help="Endpoint des lecteurs, ex. /api/movie/{id}/sources (mémorisé)")
     parser.add_argument("--quality", choices=["480", "720", "1080", "1440", "2160", "best"],
                         help="Qualité max (défaut 1080, mémorisée)")
@@ -304,6 +344,8 @@ def main():
         set_setting("films_profile_id", args.profile_id)
     if args.cookie:
         set_setting("films_cookie", args.cookie)
+    if args.user_agent:
+        set_setting("films_user_agent", args.user_agent)
     if args.sources_path:
         set_setting("films_sources_path", args.sources_path)
     if args.quality:
@@ -322,6 +364,12 @@ def main():
     print(f"  {Colors.DIM}Qualité : {quality_label} · {SETTINGS['threads']} téléchargements en parallèle{Colors.ENDC}")
     ffmpeg_hint()
     print()
+
+    # Le site exige une session (Cloudflare + credentials: include) : vérifier
+    # tout de suite, et demander le cookie une fois si besoin.
+    if not ensure_session(site, sys.stdin.isatty()):
+        print_status("Sans session valide, l'API ne renvoie rien. Relance quand tu as le cookie.", "error")
+        return
 
     # Mode direct (ligne de commande)
     media = None
