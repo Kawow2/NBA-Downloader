@@ -124,19 +124,19 @@ class Site:
         self.base = (base_url or get_setting("films_site_url") or DEFAULT_SITE_URL).rstrip("/")
         self.host = urlparse(self.base).hostname or ""
         self.debug = debug
-        self.session = requests.Session()
         self.last_status = None
-        self._setup_session()
+        self.last_error = None
+        self.impersonating = False
+        self.session = self._make_session()
 
     # ------------------------------------------------------------------ HTTP
-    def _setup_session(self):
-        ua = get_setting("films_user_agent") or DEFAULT_USER_AGENT
+    def _headers(self):
         # x-profile-id et le cookie de session reproduisent le « credentials:
         # include » du site (profil « à la Netflix »). Vides par défaut : la
-        # recherche marche sans, mais les lecteurs peuvent exiger une session
-        # — collez alors le cookie via le réglage films_cookie.
+        # recherche marche souvent sans, mais l'API peut exiger une session —
+        # collez alors le cookie via le réglage films_cookie / --cookie.
         headers = {
-            "User-Agent": ua,
+            "User-Agent": get_setting("films_user_agent") or DEFAULT_USER_AGENT,
             "Accept": "*/*",
             "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
             "Referer": self.base + "/",
@@ -146,34 +146,77 @@ class Site:
         cookie = get_setting("films_cookie")
         if cookie:
             headers["Cookie"] = cookie
-        self.session.headers.update(headers)
+        return headers
+
+    def _make_session(self):
+        # curl_cffi imite l'empreinte TLS de Chrome : indispensable quand le
+        # site est derrière Cloudflare, qui bloque le client « requests » sur
+        # son empreinte TLS (403 « Just a moment ») même avec les bons
+        # en-têtes. Repli sur requests si curl_cffi est absent.
+        try:
+            from curl_cffi import requests as creq
+            session = creq.Session(impersonate="chrome")
+            self.impersonating = True
+        except Exception:
+            session = requests.Session()
+        try:
+            session.headers.update(self._headers())
+        except Exception:
+            pass
+        return session
 
     def _get_json(self, path, params=None, referer=None):
         url = path if path.startswith("http") else self.base + path
+        extra = {"Referer": referer} if referer else None
+        self.last_error = None
         try:
-            resp = self.session.get(url, params=params, timeout=20,
-                                    headers={"Referer": referer} if referer else None)
-        except requests.RequestException as e:
-            self.last_status = f"erreur réseau : {str(e)[:120]}"
+            resp = self.session.get(url, params=params, timeout=25, headers=extra)
+        except Exception as e:
+            self.last_status = None
+            self.last_error = f"connexion impossible : {str(e)[:150]}"
             return None
         self.last_status = resp.status_code
         self._dump(url, resp)
-        if resp.status_code == 403 and self._looks_cloudflare(resp):
-            print_status(f"{self.host} est protégé par Cloudflare / exige une session.", "warning")
-            print_status("Réglez le cookie de session (menu Réglages) : F12 → onglet Réseau → une requête "
-                         "/api/... → Copier la valeur de l'en-tête « cookie ».", "info")
+        text = resp.text or ""
+        if resp.status_code >= 400 or _looks_cloudflare(text):
+            data = self._retry_cloudscraper(url, params, extra)
+            if data is not None:
+                return data
+            if _looks_cloudflare(text) or resp.status_code in (403, 503):
+                self.last_error = f"bloqué par Cloudflare / session requise (HTTP {resp.status_code})"
+            else:
+                self.last_error = f"l'API a répondu HTTP {resp.status_code}"
             return None
+        try:
+            return resp.json()
+        except ValueError:
+            snippet = text[:200].replace("\n", " ").strip()
+            self.last_error = (f"réponse non-JSON (HTTP {resp.status_code}) : {snippet!r}"
+                               if snippet else "réponse vide")
+            return None
+
+    def _retry_cloudscraper(self, url, params, extra):
+        """Dernier recours contre Cloudflare quand curl_cffi n'a pas suffi."""
+        try:
+            import cloudscraper
+        except Exception:
+            return None
+        try:
+            scraper = cloudscraper.create_scraper()
+            headers = self._headers()
+            if extra:
+                headers.update(extra)
+            resp = scraper.get(url, params=params, headers=headers, timeout=30)
+        except Exception:
+            return None
+        self.last_status = resp.status_code
+        self._dump(url, resp)
         if resp.status_code >= 400:
             return None
         try:
             return resp.json()
         except ValueError:
             return None
-
-    @staticmethod
-    def _looks_cloudflare(resp):
-        body = (resp.text or "")[:3000].lower()
-        return "just a moment" in body or "cf-chl" in body or "challenge-platform" in body
 
     def _dump(self, url, resp):
         if not self.debug:
@@ -201,6 +244,12 @@ class Site:
     # ----------------------------------------------------------------- search
     def search(self, query, limit=20):
         data = self._get_json("/api/search/multi", params={"query": query, "page": 1})
+        if data is None and self.last_error:
+            print_status(f"Recherche impossible : {self.last_error}", "error")
+            if self.last_status in (401, 403) or "session" in (self.last_error or "").lower():
+                print_status("Le site exige probablement une session : collez le cookie "
+                             "(Réglages, ou --cookie \"...\") depuis F12 → Réseau → une requête /api/... "
+                             "→ en-tête « cookie ».", "info")
         results = []
         if isinstance(data, dict):
             results = data.get("results") or data.get("data") or []
@@ -349,6 +398,12 @@ class Site:
 
 
 # ---------------------------------------------------------------- helpers
+def _looks_cloudflare(text):
+    low = (text or "")[:3000].lower()
+    return ("just a moment" in low or "cf-chl" in low or "challenge-platform" in low
+            or "attention required" in low or "enable javascript and cookies" in low)
+
+
 def _iter_urls(obj):
     """Toutes les chaînes http(s) d'un JSON imbriqué."""
     if isinstance(obj, dict):
