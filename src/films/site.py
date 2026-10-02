@@ -190,9 +190,17 @@ class Site:
         try:
             return resp.json()
         except ValueError:
-            snippet = text[:200].replace("\n", " ").strip()
-            self.last_error = (f"réponse non-JSON (HTTP {resp.status_code}) : {snippet!r}"
-                               if snippet else "réponse vide")
+            low = text[:300].lstrip().lower()
+            if low.startswith("<!doctype") or low.startswith("<html") or "<html" in low[:50]:
+                # Le serveur renvoie l'appli (index.html) au lieu du JSON :
+                # typiquement une requête API sans session (le site utilise
+                # « credentials: include »). Il faut le cookie de session.
+                self.last_error = ("l'API a renvoyé la page du site (HTML), pas du JSON — cookie de "
+                                   "session requis (le site utilise « credentials: include »)")
+            else:
+                snippet = text[:200].replace("\n", " ").strip()
+                self.last_error = (f"réponse non-JSON (HTTP {resp.status_code}) : {snippet!r}"
+                                   if snippet else "réponse vide")
             return None
 
     def _retry_cloudscraper(self, url, params, extra):
