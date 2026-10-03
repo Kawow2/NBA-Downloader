@@ -307,22 +307,59 @@ def _no_sources_help(site, media, season=None, episode=None):
     print(f"   {Colors.DIM}   Relancez aussi avec --debug pour enregistrer les réponses dans ./debug.{Colors.ENDC}")
 
 
-def download_media(site, media, out_path, season=None, episode=None):
-    """Récupère les lecteurs et télécharge le premier qui fonctionne."""
+def choose_source(sources, interactive):
+    """Propose les lecteurs / qualités disponibles. Renvoie le lecteur choisi,
+    ou None = auto (meilleure qualité, les autres en secours). Ne demande rien
+    s'il n'y a qu'un seul lecteur (souvent un seul fichier par titre)."""
+    if not sources or len(sources) == 1 or not interactive:
+        return None
+    print(f"\n{Colors.BOLD}{Colors.HEADER}🎥  LECTEURS / QUALITÉS DISPONIBLES{Colors.ENDC}")
+    for i, s in enumerate(sources, 1):
+        print(f"  {Colors.BOLD}{i}.{Colors.ENDC} {s.describe()}")
+    print(f"  {Colors.BOLD}0.{Colors.ENDC} Auto {Colors.DIM}(meilleure qualité, les autres en secours){Colors.ENDC}")
+    while True:
+        pick = ask("Choix du lecteur (0 = auto) : ").strip()
+        if pick in ("", "0"):
+            return None
+        if pick.isdigit() and 1 <= int(pick) <= len(sources):
+            return sources[int(pick) - 1]
+        print_status("Choix invalide.", "error")
+
+
+def _ordered_sources(sources, prefer):
+    """Lecteurs ordonnés pour l'essai : le préféré (même hébergeur / qualité /
+    langue) d'abord, sinon par qualité décroissante."""
+    if not prefer:
+        return list(sources)  # site.sources() renvoie déjà meilleure qualité d'abord
+    def score(s):
+        sc = 0
+        if s.host == prefer.host:
+            sc += 1000
+        if prefer.height and s.height == prefer.height:
+            sc += 400
+        if prefer.lang and s.lang == prefer.lang:
+            sc += 200
+        return sc + (s.height or 0)
+    return sorted(sources, key=score, reverse=True)
+
+
+def download_media(site, media, out_path, season=None, episode=None, prefer=None, sources=None):
+    """Télécharge le premier lecteur qui fonctionne (ordonné selon `prefer`)."""
     if os.path.exists(out_path):
         print_status(f"Déjà présent : {out_path}", "success")
         return True
-    sources = site.sources(media, season=season, episode=episode)
+    if sources is None:
+        sources = site.sources(media, season=season, episode=episode)
     if not sources:
         _no_sources_help(site, media, season, episode)
         return False
-    print_status(f"{len(sources)} lecteur(s) : {', '.join(dict.fromkeys(s.host for s in sources))}", "info")
-    for i, src in enumerate(sources, 1):
-        print_separator(title=f"LECTEUR {i}/{len(sources)} · {src.host}")
+    ordered = _ordered_sources(sources, prefer)
+    for i, src in enumerate(ordered, 1):
+        print_separator(title=f"LECTEUR {i}/{len(ordered)} · {src.describe()}")
         if download_part(src.url, out_path, page_url=site.base + "/"):
             print_status(f"Enregistré : {out_path}", "success")
             return True
-        print_status(f"Échec sur « {src.host} », lecteur suivant…", "warning")
+        print_status(f"Échec sur « {src.describe()} », lecteur suivant…", "warning")
     print_status("Tous les lecteurs ont échoué.", "error")
     return False
 
@@ -334,7 +371,16 @@ def process_movie(site, media, dest):
     folder, stem = plex.movie_target(dest, media.title, media.year)
     out_path = os.path.join(folder, stem + ".mp4")
     print_status(f"Fichier : {out_path}", "info")
-    ok = download_media(site, media, out_path)
+    if os.path.exists(out_path):
+        print_status(f"Déjà présent : {out_path}", "success")
+        return True
+    sources = site.sources(media)
+    if not sources:
+        _no_sources_help(site, media)
+        clean_temp_files(folder, stem, keep_own=True)
+        return False
+    prefer = choose_source(sources, sys.stdin.isatty())
+    ok = download_media(site, media, out_path, prefer=prefer, sources=sources)
     clean_temp_files(folder, stem, keep_own=not ok)
     return ok
 
@@ -363,6 +409,8 @@ def process_series(site, media, dest, cli_season=None, cli_episodes=None):
         return False
 
     failed = 0
+    prefer = None          # lecteur préféré, choisi une seule fois
+    asked_source = False
     for sn in season_numbers:
         episodes = site.episodes(media, sn)
         if not episodes:
@@ -387,8 +435,19 @@ def process_series(site, media, dest, cli_season=None, cli_episodes=None):
             ep = by_num[en]
             folder, stem = plex.series_target(dest, media.title, sn, en, media.year, ep.title)
             out_path = os.path.join(folder, stem + ".mp4")
+            if os.path.exists(out_path):
+                print_status(f"Déjà présent : {out_path}", "success")
+                continue
             print_separator(title=f"S{sn:02d}E{en:02d}" + (f" · {ep.title}" if ep.title else ""))
-            if not download_media(site, media, out_path, season=sn, episode=en):
+            # Choix du lecteur/qualité une seule fois (sur le 1er épisode à
+            # télécharger), puis appliqué à tous les suivants.
+            ep_sources = None
+            if not asked_source:
+                ep_sources = site.sources(media, season=sn, episode=en)
+                prefer = choose_source(ep_sources, sys.stdin.isatty())
+                asked_source = True
+            if not download_media(site, media, out_path, season=sn, episode=en,
+                                  prefer=prefer, sources=ep_sources):
                 failed += 1
             clean_temp_files(folder, stem, keep_own=True)
 

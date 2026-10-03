@@ -163,7 +163,8 @@ Films et séries depuis **[nakios.rent](https://nakios.rent)** (l'API du site es
 2. **Résultat** : choisir le numéro ; chaque ligne indique **Film** ou **Série** et l'année.
 3. **Série** : choisir la/les **saison(s)** (ex. `1`, `1-3`, Entrée = toutes), puis les **épisodes** (ex. `1-5`, `1,3,5`, Entrée = tous).
 4. **Chemin** : Entrée = dossier Films & Séries, ou un autre chemin.
-5. **Téléchargement** en `.mp4` : le programme récupère les lecteurs du média et prend le **premier qui fonctionne** (les autres servent de secours). Les fichiers déjà présents sont ignorés ; relancer reprend ce qui manque.
+5. **Lecteur / qualité** : si le titre propose **plusieurs lecteurs**, la liste s'affiche (`lecteur · qualité · langue`, ex. `Uqload · 1080p · VOSTFR`) pour en choisir un, ou `0` = auto. Ils sont classés **meilleure qualité d'abord** ; pour une série, le choix est demandé **une fois** et s'applique à tous les épisodes. S'il n'y a qu'un lecteur (souvent un seul fichier par titre), rien n'est demandé.
+6. **Téléchargement** en `.mp4` : le lecteur choisi est pris en priorité, les autres servent de secours en cas d'échec. Les fichiers déjà présents sont ignorés ; relancer reprend ce qui manque.
 
 La **qualité max** est demandée **juste après le choix du film/série** (720p / 1080p / 1440p / 4K / meilleure) et mémorisable ; le programme prend ensuite la meilleure qualité **sous ce plafond** selon ce que propose la source. `--quality 720|1080|1440|2160|best` la fixe sans la demander, et le réglage `9` la change durablement. Note : pour une source en **fichier direct** (un seul `.mp4`), la résolution est celle du fichier et ne dépend pas du plafond.
 

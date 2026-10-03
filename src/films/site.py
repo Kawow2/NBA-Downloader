@@ -106,17 +106,33 @@ class Episode:
 
 
 class Source:
-    """Un lecteur vidéo : une URL (iframe d'hébergeur ou flux direct)."""
+    """Un lecteur vidéo : une URL (iframe d'hébergeur ou flux direct), avec sa
+    qualité et sa langue quand on arrive à les déduire (du JSON ou de l'URL)."""
 
     def __init__(self, url, label=None, quality=None, lang=None):
         self.url = url
         self.host = host_display_name(url)
-        self.quality = quality
-        self.lang = lang
+        # Qualité : champ explicite du JSON, sinon devinée depuis l'URL.
+        q_label, q_height = _quality_from(quality)
+        if not q_height:
+            q_label, q_height = _quality_from(url)
+        if quality and not q_label:
+            q_label = str(quality)
+        self.quality = q_label
+        self.height = q_height
+        self.lang = (str(lang).upper() if lang else None) or _lang_from(url) or _lang_from(label or "")
         self.label = label or self.host
 
+    def describe(self):
+        bits = [self.host]
+        if self.quality:
+            bits.append(self.quality)
+        if self.lang:
+            bits.append(self.lang)
+        return " · ".join(bits)
+
     def __repr__(self):
-        return f"Source({self.host}, {self.url})"
+        return f"Source({self.describe()}, {self.url})"
 
 
 class Site:
@@ -429,17 +445,11 @@ class Site:
         return []
 
     def _parse_sources(self, data):
-        seen, out = set(), []
-        for url in _iter_urls(data):
-            url = _clean_url(url)
-            if not url or url.rstrip("/") in seen:
-                continue
-            if self._is_own_host(url):
-                continue  # liens internes (affiches, pages du site)
-            if not _looks_like_stream(url):
-                continue
-            seen.add(url.rstrip("/"))
-            out.append(Source(url))
+        found, seen = [], set()
+        _collect_sources(data, self.host, found, seen)
+        out = [Source(u, label=lbl, quality=q, lang=lg) for (u, lbl, q, lg) in found]
+        # Meilleure qualité d'abord (les lecteurs sans qualité connue ensuite).
+        out.sort(key=lambda s: s.height, reverse=True)
         return out
 
     def _is_own_host(self, url):
@@ -490,6 +500,78 @@ def _looks_like_stream(url):
     if any(k in host for k in _KNOWN_VIDEO_HOSTS):
         return True
     return bool(_EMBED_PATH.search(urlparse(url).path))
+
+
+# Qualité / langue : déduites d'un libellé JSON ou de l'URL.
+_RES_PATTERNS = [
+    (re.compile(r"(?<!\d)(2160|4k|uhd)(?!\d)", re.I), "2160p", 2160),
+    (re.compile(r"(?<!\d)(1440|2k|qhd)(?!\d)", re.I), "1440p", 1440),
+    (re.compile(r"(?<!\d)(1080|fhd)(?!\d)", re.I), "1080p", 1080),
+    (re.compile(r"(?<!\d)(720)(?!\d)|\bhd\b", re.I), "720p", 720),
+    (re.compile(r"(?<!\d)(480)(?!\d)|\bsd\b", re.I), "480p", 480),
+    (re.compile(r"(?<!\d)(360)(?!\d)", re.I), "360p", 360),
+]
+_LANG_RE = re.compile(r"\b(vostfr|vost|vff|vfq|vf|truefrench|french|multi|vo)\b", re.I)
+
+
+def _quality_from(text):
+    """(libellé, hauteur) depuis un texte (ex. '1080p', 'HD', '.../1080/...'),
+    ou (None, 0)."""
+    t = str(text or "")
+    for rx, label, height in _RES_PATTERNS:
+        if rx.search(t):
+            return label, height
+    return None, 0
+
+
+def _lang_from(text):
+    m = _LANG_RE.search(str(text or ""))
+    return m.group(1).upper() if m else None
+
+
+def _same_host(url, host):
+    h = (urlparse(url).hostname or "").lower()
+    host = (host or "").lower()
+    return bool(host) and (h == host or h.endswith("." + host))
+
+
+_QUALITY_KEYS = ("quality", "resolution", "res", "def", "q", "qualite", "qualité", "size")
+_LANG_KEYS = ("lang", "language", "langue", "audio", "version", "vf")
+_LABEL_KEYS = ("server", "name", "label", "host", "player", "source", "provider", "cdn", "title")
+
+
+def _collect_sources(obj, host, found, seen):
+    """Parcourt le JSON et collecte (url, label, quality, lang) pour chaque
+    lecteur/flux. Les champs voisins (quality/lang/server) d'un même objet
+    servent de contexte, et la clé d'un dict ({'1080': url}) sert d'indice."""
+    if isinstance(obj, dict):
+        ctx_q = ctx_lang = ctx_label = None
+        for k, v in obj.items():
+            if isinstance(v, (str, int, float)):
+                kl, sval = k.lower(), str(v)
+                if kl in _QUALITY_KEYS and _quality_from(sval)[1]:
+                    ctx_q = ctx_q or sval
+                elif kl in _LANG_KEYS and _lang_from(sval):
+                    ctx_lang = ctx_lang or sval
+                elif kl in _LABEL_KEYS:
+                    ctx_label = ctx_label or sval
+        for k, v in obj.items():
+            if isinstance(v, str):
+                u = _clean_url(v)
+                if u and _looks_like_stream(u) and not _same_host(u, host) and u.rstrip("/") not in seen:
+                    seen.add(u.rstrip("/"))
+                    key_q = str(k) if _quality_from(str(k))[1] else None
+                    found.append((u, ctx_label, ctx_q or key_q, ctx_lang))
+            else:
+                _collect_sources(v, host, found, seen)
+    elif isinstance(obj, list):
+        for v in obj:
+            _collect_sources(v, host, found, seen)
+    elif isinstance(obj, str):
+        u = _clean_url(obj)
+        if u and _looks_like_stream(u) and not _same_host(u, host) and u.rstrip("/") not in seen:
+            seen.add(u.rstrip("/"))
+            found.append((u, None, None, None))
 
 
 def parse_media_url(url):
