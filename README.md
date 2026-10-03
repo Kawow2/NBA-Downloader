@@ -166,7 +166,7 @@ Films et séries depuis **[nakios.rent](https://nakios.rent)** (l'API du site es
 5. **Lecteur / qualité** : si le titre propose **plusieurs lecteurs**, la liste s'affiche (`lecteur · qualité · langue`, ex. `Uqload · 1080p · VOSTFR`) pour en choisir un, ou `0` = auto. Ils sont classés **meilleure qualité d'abord** ; pour une série, le choix est demandé **une fois** et s'applique à tous les épisodes. S'il n'y a qu'un lecteur (souvent un seul fichier par titre), rien n'est demandé.
 6. **Téléchargement** en `.mp4` : le lecteur choisi est pris en priorité, les autres servent de secours en cas d'échec. Les fichiers déjà présents sont ignorés ; relancer reprend ce qui manque.
 
-La **qualité max** est demandée **juste après le choix du film/série** (720p / 1080p / 1440p / 4K / meilleure) et mémorisable ; le programme prend ensuite la meilleure qualité **sous ce plafond** selon ce que propose la source. `--quality 720|1080|1440|2160|best` la fixe sans la demander, et le réglage `9` la change durablement. Note : pour une source en **fichier direct** (un seul `.mp4`), la résolution est celle du fichier et ne dépend pas du plafond.
+Les **qualités proposées sont celles réellement disponibles pour le titre** (lues dans les données du site et l'URL) : la liste des lecteurs affiche `lecteur · qualité · langue`, classée meilleure d'abord. Il n'y a donc pas de menu de « plafond » à choisir — tu prends directement ce qui existe. `--quality 720|1080|1440|2160|best` (ou le réglage `9`) reste disponible comme plafond facultatif (défaut 1080p), surtout utile pour les lecteurs gérés par yt-dlp ; une source en **fichier direct** (un seul `.mp4`) garde la résolution de son fichier quoi qu'il arrive.
 
 ## Organisation pour Plex
 
