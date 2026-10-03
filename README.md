@@ -242,45 +242,46 @@ Le cookie expire au bout de quelques jours (ou si ton IP publique change) : refa
 
 > Alternative sans jeton : `ssh -X` avec un serveur X sur le PC fixe (VcXsrv sous Windows, XQuartz sous macOS) affiche le navigateur de `--browser-visible` sur ton écran à travers le SSH.
 
-#### Tout automatiser — serveur autonome (recommandé si le serveur est allumé en permanence)
+#### Recommandé : télécharger le soir depuis le PC fixe (éteint la journée)
 
-Pour que ça marche **même PC fixe éteint**, c'est le **serveur** qui doit porter le navigateur (il tourne Chromium en headless / écran virtuel), avec un **profil persistant** qu'on amorce **une seule fois**. Ensuite le serveur rafraîchit sa session tout seul, sans le PC fixe.
+Workflow typique : le **portable** (serveur Plex) reste allumé, mais tu ne télécharges que le **soir**, en SSH depuis ton **PC fixe** (éteint la journée, rallumé le soir). Comme le PC fixe a un écran, c'est lui qui capture la session (Cloudflare se résout tout seul une fois le profil amorcé) et la **pousse** au portable ; le portable n'a besoin d'**aucun navigateur**.
 
-**Sur le serveur (une fois) — installer les briques :**
+**Prérequis (une fois) :** une **clé SSH** du PC fixe vers le portable (`ssh-keygen` puis `ssh-copy-id user@portable`, ou l'équivalent Windows), pour que le `--push` soit non interactif.
+
+**Amorçage (une seule fois), sur le PC fixe :**
+```powershell
+.\start.ps1 films --export-session --browser-visible --push user@portable
+```
+→ une fenêtre s'ouvre sur ton écran, tu passes Cloudflare (+ une recherche) ; la session est capturée et poussée sur le portable. Le profil du PC fixe est désormais amorcé.
+
+**Chaque soir**, deux commandes sur le PC fixe (allumé) :
+```powershell
+.\start.ps1 films --export-session --push user@portable   # session fraîche -> portable (sans fenêtre, grâce au profil)
+ssh user@portable "cd ~/NBA-Downloader && ./start.sh films --no-browser"   # recherche & télécharge
+```
+
+**Pour l'oublier :** fais la 1re commande **automatiquement au démarrage du PC fixe** (ainsi, quand tu le rallumes le soir, le portable a déjà une session fraîche) :
+```
+schtasks /create /tn "nakios-session" /sc ONLOGON ^
+  /tr "C:\code\NBA-Downloader\.venv\Scripts\python.exe C:\code\NBA-Downloader\main.py films --export-session --push user@portable"
+```
+
+PC fixe éteint la journée = aucun souci (tu ne télécharges pas à ce moment-là). S'il se rallume et que Cloudflare redemande une vérification, la fenêtre réapparaît (tu as un écran) : tu cliques, c'est reparti. Le cookie est lié à ton **IP publique** : PC fixe et portable doivent être sur le **même réseau**.
+
+#### Alternative : serveur 100 % autonome (téléchargements planifiés 24/7)
+
+Si tu veux que le **portable télécharge seul** (sans PC fixe du tout, p. ex. à heure fixe), c'est lui qui porte le navigateur, en headless + écran virtuel, avec un profil amorcé une fois :
 ```bash
+# sur le portable, une fois :
 sudo apt install xvfb
 .venv/bin/python -m pip install playwright pyvirtualdisplay && .venv/bin/python -m playwright install chromium
-```
-
-**Amorçage (une seule fois, besoin de VOIR le navigateur une fois) — depuis le PC fixe :**
-```bash
-ssh -X user@serveur            # Windows : installe VcXsrv et lance-le avant ; macOS : XQuartz
-cd ~/NBA-Downloader && ./start.sh films --browser-visible
-```
-La fenêtre s'affiche sur ton écran via le SSH : passe Cloudflare (+ une recherche). Le profil du **serveur** est maintenant amorcé.
-
-**Entretien automatique sur le serveur (cron) — rafraîchit la session sans écran :**
-```bash
-crontab -e
-# toutes les 6 h : garde la session fraîche (headless + écran virtuel + profil amorcé)
+# amorçage une fois (voir le navigateur) : ssh -X user@portable puis ./start.sh films --browser-visible
+# entretien (cron) :
 0 */6 * * * cd ~/NBA-Downloader && ./start.sh films --refresh-session >> ~/nakios-refresh.log 2>&1
 ```
+Profil + config sur le disque du portable → **survivent au redémarrage**, le cron repart au boot.
 
-Désormais tu télécharges quand tu veux (`./start.sh films`), **PC fixe éteint**. Et si le **serveur redémarre** : le profil et la config sont sur son disque, le cron se relance au boot → tout repart seul, rien à refaire.
-
-> Si le headless/écran virtuel n'arrive pas à repasser Cloudflare tout seul (challenge interactif), refais juste l'**amorçage** (ssh -X) une fois — c'est la seule manip qui peut se reproduire, et rarement.
-
-#### Alternative — le PC fixe pousse la session au serveur
-
-Si tu préfères que le navigateur reste sur le **PC fixe** (serveur vraiment incapable de lancer Chromium) : le PC fixe capture et **pousse** la session en SSH. ⚠️ Il faut alors que le **PC fixe soit allumé** pour rafraîchir.
-
-1. Amorçage (une fois) : `python main.py films --export-session --browser-visible --push user@serveur` (clé SSH conseillée pour le non-interactif).
-2. Ensuite en headless : `python main.py films --export-session --push user@serveur`.
-3. Planifié sur le PC fixe, ex. toutes les 12 h :
-   - **Windows** : `schtasks /create /tn "nakios-session" /sc HOURLY /mo 12 /tr "C:\code\NBA-Downloader\.venv\Scripts\python.exe C:\code\NBA-Downloader\main.py films --export-session --push user@serveur"`
-   - **Linux/macOS** : `0 */12 * * * cd ~/NBA-Downloader && .venv/bin/python main.py films --export-session --push user@serveur`
-
-Options utiles : `--out fichier` (écrit le jeton au lieu de l'afficher), `--profile-dir CHEMIN`, `--no-profile`.
+Options utiles : `--out fichier` (écrit le jeton au lieu de l'afficher / le pousser), `--profile-dir CHEMIN`, `--no-profile`.
 
 ### Si « aucun lecteur trouvé »
 
