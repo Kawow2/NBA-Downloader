@@ -36,10 +36,10 @@ window.chrome = window.chrome || { runtime: {} };
 
 # fetch() exécuté DANS la page : cookies + Cloudflare gérés par le navigateur.
 # `headers` = en-têtes capturés sur un vrai appel de l'appli (x-profile-id…).
-_FETCH_JS = """async ({base, path, headers}) => {
+_FETCH_JS = """async ({url, headers}) => {
   try {
     const h = Object.assign({'accept': '*/*'}, headers || {});
-    const r = await fetch(base + path, {credentials: 'include', headers: h});
+    const r = await fetch(url, {credentials: 'include', headers: h});
     const ct = (r.headers.get('content-type') || '').toLowerCase();
     const body = await r.text();
     return {status: r.status, ct: ct, body: body};
@@ -104,6 +104,8 @@ class BrowserSession:
         self.user_agent = None
         self._api_ok = False
         self.api_headers = {}   # en-têtes capturés sur un vrai appel API de l'appli
+        self.api_base = None    # origine réelle de l'API détectée (scheme://host)
+        self.api_urls = []      # échantillon d'URLs d'API réellement appelées
 
     def _say(self, msg, kind="info"):
         if self._status:
@@ -129,23 +131,42 @@ class BrowserSession:
         return False
 
     def _on_response(self, response):
-        """Repère le premier appel API réussi de l'appli du site et en capture
-        les en-têtes utiles (x-profile-id, authorization…) pour les rejouer."""
-        if self._api_ok:
-            return
+        """Observe les appels API réussis de l'appli : en déduit la vraie base
+        de l'API (scheme://host) et capture les en-têtes utiles (x-profile-id,
+        authorization…) pour les rejouer. Garde en priorité un appel de
+        recherche (le plus représentatif)."""
         try:
-            if "/api/" in response.url and response.status == 200 \
-                    and "json" in (response.headers.get("content-type") or "").lower():
-                req = response.request.headers
-                keep = {}
-                for k, v in req.items():
-                    kl = k.lower()
-                    if kl == "authorization" or (kl.startswith("x-") and kl != "x-requested-with"):
-                        keep[k] = v
+            url = response.url
+            if "/api/" not in url or response.status != 200:
+                return
+            if "json" not in (response.headers.get("content-type") or "").lower():
+                return
+            from urllib.parse import urlparse
+            o = urlparse(url)
+            self.api_base = f"{o.scheme}://{o.netloc}"
+            bare = url.split("?")[0]
+            if bare not in [u.split("?")[0] for u in self.api_urls]:
+                self.api_urls = (self.api_urls + [url])[:20]
+            req = response.request.headers
+            keep = {k: v for k, v in req.items()
+                    if k.lower() == "authorization"
+                    or (k.lower().startswith("x-") and k.lower() != "x-requested-with")}
+            if "search" in o.path or not self.api_headers:
                 self.api_headers = keep
-                self._api_ok = True
+            self._api_ok = True
         except Exception:
             pass
+
+    def observed_summary(self):
+        """Résumé lisible des appels API réellement vus (pour diagnostic)."""
+        lines = []
+        if self.api_base:
+            lines.append(f"API détectée sur : {self.api_base}")
+        for u in self.api_urls[:12]:
+            lines.append("   " + u)
+        if self.api_headers:
+            lines.append("En-têtes ajoutés par l'appli : " + ", ".join(sorted(self.api_headers)))
+        return "\n".join(lines)
 
     def _try_open(self, headless, timeout):
         try:
@@ -224,10 +245,16 @@ class BrowserSession:
             return False
 
     # ------------------------------------------------------------------ API
+    def _url(self, path):
+        if path.startswith("http"):
+            return path
+        base = self.api_base or self.base
+        return base + path if path.startswith("/") else base + "/" + path
+
     def _fetch(self, path):
         try:
             return self._page.evaluate(
-                _FETCH_JS, {"base": self.base, "path": path, "headers": self.api_headers or {}})
+                _FETCH_JS, {"url": self._url(path), "headers": self.api_headers or {}})
         except Exception:
             return {"status": 0, "ct": "", "body": ""}
 

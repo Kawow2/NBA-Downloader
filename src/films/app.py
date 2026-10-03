@@ -113,6 +113,9 @@ def ensure_session(site, interactive, use_browser=True, browser_visible=False):
             if bs.open(headless=not browser_visible):
                 # Capturer les en-têtes propres à l'appli (x-profile-id…) vus
                 # sur un vrai appel : sans eux l'API renvoie du HTML.
+                api_base = getattr(bs, "api_base", None)
+                if api_base:
+                    set_setting("films_api_base", api_base)
                 captured = getattr(bs, "api_headers", None) or {}
                 if captured:
                     pid = next((v for k, v in captured.items() if k.lower() == "x-profile-id"), None)
@@ -138,9 +141,13 @@ def ensure_session(site, interactive, use_browser=True, browser_visible=False):
                     print_status("Session OK ✅ via navigateur (laissé ouvert le temps de la session).",
                                  "success")
                     return True
+                summary = bs.observed_summary() if hasattr(bs, "observed_summary") else ""
                 site.browser = None
                 bs.close()
-                print_status("Le navigateur a franchi Cloudflare mais l'API ne répond pas en JSON.", "warning")
+                print_status("Le navigateur a franchi Cloudflare mais mes appels API ne renvoient pas de JSON.", "warning")
+                if summary:
+                    print_status("Appels API réellement utilisés par le site (copie-moi ces lignes) :", "info")
+                    print(summary)
             else:
                 print_status("Navigateur : Cloudflare non franchi. Sur un PC avec écran : --browser-visible ; "
                              "sur un serveur sans écran : sudo apt install xvfb && pip install pyvirtualdisplay "

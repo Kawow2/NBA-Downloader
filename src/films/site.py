@@ -191,7 +191,8 @@ class Site:
             else:
                 self.last_status, self.last_error = None, "navigateur : réponse non-JSON"
             return data
-        url = path if path.startswith("http") else self.base + path
+        api_base = get_setting("films_api_base") or self.base
+        url = path if path.startswith("http") else api_base + path
         extra = {"Referer": referer} if referer else None
         self.last_error = None
         try:
