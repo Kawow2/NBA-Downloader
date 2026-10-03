@@ -91,7 +91,7 @@ def parse_selection(text, available):
 BROWSER_HINT = "pip install playwright && playwright install chromium"
 
 
-def ensure_session(site, interactive, use_browser=True, browser_visible=False):
+def ensure_session(site, interactive, use_browser=True, browser_visible=False, profile_dir=None):
     """S'assure que l'API répond du JSON, dans cet ordre :
       1. test direct (cookie déjà mémorisé, encore valide) ;
       2. récupération AUTOMATIQUE via un navigateur headless (Playwright) qui
@@ -112,7 +112,7 @@ def ensure_session(site, interactive, use_browser=True, browser_visible=False):
                    "(télécharge un navigateur, ~1 min, une seule fois) ?", default=True):
                 browser_session.install(status=print_status)
         if browser_session.available():
-            bs = browser_session.BrowserSession(site.base, status=print_status)
+            bs = browser_session.BrowserSession(site.base, status=print_status, profile_dir=profile_dir)
             if bs.open(headless=not browser_visible):
                 # Capturer les en-têtes propres à l'appli (x-profile-id…) vus
                 # sur un vrai appel : sans eux l'API renvoie du HTML.
@@ -444,7 +444,7 @@ _SESSION_KEYS = ("films_cookie", "films_user_agent", "films_api_base",
                  "films_profile_id", "films_extra_headers")
 
 
-def export_session(browser_visible):
+def export_session(browser_visible, profile_dir=None):
     """(sur une machine avec navigateur) Récupère la session via le navigateur
     et renvoie un jeton base64 contenant tout ce qu'il faut (cookie, UA, base
     d'API, profil, en-têtes), ou None."""
@@ -457,7 +457,7 @@ def export_session(browser_visible):
         print_status("Playwright indisponible : " + browser_session.install_hint(), "error")
         return None
     site = Site()
-    bs = browser_session.BrowserSession(site.base, status=print_status)
+    bs = browser_session.BrowserSession(site.base, status=print_status, profile_dir=profile_dir)
     if not bs.open(headless=not browser_visible):
         bs.close()
         print_status("Cloudflare non franchi. Sur un PC avec écran, réessaie avec --browser-visible.", "error")
@@ -499,6 +499,38 @@ def import_session(token):
                      "sur le MÊME réseau (même IP publique), et réexporte un jeton frais si besoin.", "warning")
 
 
+def deliver_session_token(token, out=None, push=None, push_dir="~/NBA-Downloader"):
+    """Livre le jeton : écrit dans un fichier (--out), pousse sur le serveur en
+    SSH (--push), ou l'affiche pour copier-coller."""
+    if out:
+        try:
+            with open(out, "w", encoding="utf-8") as f:
+                f.write(token + "\n")
+            print_status(f"Jeton écrit dans {out}.", "success")
+        except OSError as e:
+            print_status(f"Écriture impossible ({e}).", "error")
+    if push:
+        import subprocess
+        remote = f"cd {push_dir} && ./start.sh films --import-session {token}"
+        print_status(f"Import de la session sur {push} via SSH…", "loading")
+        try:
+            rc = subprocess.call(["ssh", push, remote])
+        except FileNotFoundError:
+            print_status("ssh introuvable sur cette machine.", "error")
+            rc = 1
+        if rc == 0:
+            print_status(f"Session poussée sur {push} ✅", "success")
+        else:
+            print_status(f"Échec de l'import distant (code {rc}). Colle la commande à la main :", "warning")
+            print(f"\n   ssh {push} \"cd {push_dir} && ./start.sh films --import-session {token}\"\n")
+    if not out and not push:
+        print_separator(title="JETON DE SESSION")
+        print_status("Sur le serveur (SSH), colle cette commande :", "info")
+        print(f"\n   python main.py films --import-session {token}\n")
+    print_status("Le cookie expire au bout de quelques jours : réexporte un jeton quand l'API recommence "
+                 "à refuser.", "info")
+
+
 # -------------------------------------------------------------------- main
 def main():
     global _default_dir_override
@@ -523,6 +555,16 @@ def main():
                         help="(machine AVEC navigateur) capture la session et imprime un jeton à importer sur le serveur SSH")
     parser.add_argument("--import-session", metavar="JETON",
                         help="(serveur SSH SANS navigateur) importe le jeton généré par --export-session")
+    parser.add_argument("--push", metavar="SSH",
+                        help="(avec --export-session) importe le jeton sur le serveur via ssh, ex. user@serveur")
+    parser.add_argument("--push-dir", metavar="DIR", default="~/NBA-Downloader",
+                        help="dossier du projet sur le serveur distant (défaut ~/NBA-Downloader)")
+    parser.add_argument("--out", metavar="FICHIER",
+                        help="(avec --export-session) écrit le jeton dans ce fichier au lieu de l'afficher")
+    parser.add_argument("--profile-dir", metavar="DIR",
+                        help="dossier de profil navigateur persistant (garde la session Cloudflare entre deux lancements)")
+    parser.add_argument("--no-profile", action="store_true",
+                        help="ne pas utiliser de profil persistant (session navigateur éphémère)")
     parser.add_argument("--sources-path", help="Endpoint des lecteurs, ex. /api/movie/{id}/sources (mémorisé)")
     parser.add_argument("--quality", choices=["480", "720", "1080", "1440", "2160", "best"],
                         help="Qualité max (défaut 1080, mémorisée)")
@@ -551,18 +593,17 @@ def main():
     if args.threads:
         set_setting("films_threads", args.threads)
 
+    from src.films import session as _browser_session
+    profile_dir = None if args.no_profile else (args.profile_dir or _browser_session.DEFAULT_PROFILE_DIR)
+
     # Transfert de session vers un serveur sans navigateur (SSH / headless).
     if args.import_session:
         import_session(args.import_session)
         return
     if args.export_session:
-        token = export_session(args.browser_visible)
+        token = export_session(args.browser_visible, profile_dir=profile_dir)
         if token:
-            print_separator(title="JETON DE SESSION")
-            print_status("Sur le serveur (SSH), colle cette commande :", "info")
-            print(f"\n   python main.py films --import-session {token}\n")
-            print_status("Le cookie expire au bout de quelques jours : réexporte un jeton quand l'API "
-                         "recommence à refuser.", "info")
+            deliver_session_token(token, out=args.out, push=args.push, push_dir=args.push_dir)
         return
 
     quality = str(get_setting("films_quality") or "1080")
@@ -580,7 +621,7 @@ def main():
     # Le site exige une session (Cloudflare + credentials: include) : vérifier
     # tout de suite, et demander le cookie une fois si besoin.
     if not ensure_session(site, sys.stdin.isatty(), use_browser=not args.no_browser,
-                          browser_visible=args.browser_visible):
+                          browser_visible=args.browser_visible, profile_dir=profile_dir):
         print_status("Sans session valide, l'API ne renvoie rien.", "error")
         return
 

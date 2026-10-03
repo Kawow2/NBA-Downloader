@@ -242,6 +242,29 @@ Le cookie expire au bout de quelques jours (ou si ton IP publique change) : refa
 
 > Alternative sans jeton : `ssh -X` avec un serveur X sur le PC fixe (VcXsrv sous Windows, XQuartz sous macOS) affiche le navigateur de `--browser-visible` sur ton écran à travers le SSH.
 
+#### Tout automatiser (zéro manip récurrente)
+
+Deux ingrédients : un **profil navigateur persistant** (la clearance Cloudflare est gardée, donc les captures suivantes passent **sans rien résoudre à la main**), et une **tâche planifiée** sur le PC fixe qui capture + **pousse** la session au serveur en SSH (`--push`).
+
+1. **Une seule fois**, sur le PC fixe, résous Cloudflare pour « amorcer » le profil :
+   ```
+   python main.py films --export-session --browser-visible --push user@serveur
+   ```
+   (`--push` fait le `ssh user@serveur "… --import-session <jeton>"` tout seul ; configure une **clé SSH** pour que ce soit non interactif.)
+2. **Ensuite**, la même commande en **headless** réussit sans fenêtre (grâce au profil) :
+   ```
+   python main.py films --export-session --push user@serveur
+   ```
+3. **Planifie-la** sur le PC fixe, p. ex. toutes les 12 h :
+   - **Windows** (Planificateur de tâches) :
+     ```
+     schtasks /create /tn "nakios-session" /sc HOURLY /mo 12 ^
+       /tr "C:\code\NBA-Downloader\.venv\Scripts\python.exe C:\code\NBA-Downloader\main.py films --export-session --push user@serveur"
+     ```
+   - **Linux/macOS** (cron) : `0 */12 * * * cd ~/NBA-Downloader && .venv/bin/python main.py films --export-session --push user@serveur`
+
+Le serveur reçoit alors une session fraîche en continu ; il télécharge avec `--no-browser` et n'a jamais besoin de navigateur. Options utiles : `--out fichier` (écrit le jeton au lieu de l'afficher, pour le `scp` toi-même), `--profile-dir CHEMIN` (profil ailleurs), `--no-profile` (désactive le profil persistant).
+
 ### Si « aucun lecteur trouvé »
 
 La **recherche**, les **détails** et la **liste des saisons/épisodes** suivent l'API TMDB (trouvées automatiquement). En revanche, l'endpoint qui renvoie les **lecteurs vidéo** est propre au site : plusieurs chemins courants sont essayés, mais s'ils échouent, indiquez le bon :
