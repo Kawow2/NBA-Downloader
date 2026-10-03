@@ -100,7 +100,7 @@ def ensure_session(site, interactive, use_browser=True, browser_visible=False):
     if ok:
         return True
 
-    # 2) Automatique : un vrai navigateur (Playwright) va chercher la session.
+    # 2) Automatique : un vrai navigateur (Playwright) franchit Cloudflare.
     if use_browser:
         from src.films import session as browser_session
         if not browser_session.available() and interactive:
@@ -108,16 +108,31 @@ def ensure_session(site, interactive, use_browser=True, browser_visible=False):
                    "(télécharge un navigateur, ~1 min, une seule fois) ?", default=True):
                 browser_session.install(status=print_status)
         if browser_session.available():
-            creds = browser_session.grab_session(site.base, headless=not browser_visible,
-                                                  status=print_status)
-            if creds:
-                site.set_credentials(cookie=creds[0], user_agent=creds[1])
-                ok, reason = site.probe_session()
+            bs = browser_session.BrowserSession(site.base, status=print_status)
+            if bs.open(headless=not browser_visible):
+                # a) réutiliser le cookie avec le client rapide (curl_cffi).
+                cookie, ua = bs.cookies_and_ua()
+                if cookie:
+                    site.set_credentials(cookie=cookie, user_agent=ua)
+                ok, _ = site.probe_session()
                 if ok:
-                    print_status("Session automatique OK ✅ (mémorisée, renouvelée seule à l'expiration).",
+                    bs.close()
+                    print_status("Session OK ✅ (client rapide, mémorisée).", "success")
+                    return True
+                # b) sinon, garder le navigateur comme transport de l'API.
+                site.attach_browser(bs)
+                ok, _ = site.probe_session()
+                if ok:
+                    print_status("Session OK ✅ via navigateur (laissé ouvert le temps de la session).",
                                  "success")
                     return True
-                print_status(f"Session récupérée mais l'API répond encore : {reason}", "warning")
+                site.browser = None
+                bs.close()
+                print_status("Le navigateur a franchi Cloudflare mais l'API ne répond pas en JSON.", "warning")
+            else:
+                print_status("Navigateur : Cloudflare non franchi. Sur un PC avec écran : --browser-visible ; "
+                             "sur un serveur sans écran : sudo apt install xvfb && pip install pyvirtualdisplay "
+                             "(sinon, repli manuel ci-dessous).", "warning")
         elif interactive:
             print_status(f"Astuce : installez Playwright pour automatiser la session ({BROWSER_HINT}).", "info")
 
@@ -406,39 +421,44 @@ def main():
         print_status("Sans session valide, l'API ne renvoie rien.", "error")
         return
 
-    # Mode direct (ligne de commande)
-    media = None
-    if args.url:
-        parsed = parse_media_url(args.url)
-        if not parsed:
-            print_status("URL non reconnue (attendu .../series/<id> ou .../film/<id>).", "error")
-            return
-        from src.films.site import Media
-        media = Media({"id": parsed[1]}, media_type=parsed[0])
-    elif args.search:
-        results = site.search(args.search)
-        if not results:
-            print_status("Aucun résultat.", "error")
-            return
-        print_results(results)
-        pick = ask(f"Numéro (1-{len(results)}) : ")
-        if not (pick.isdigit() and 1 <= int(pick) <= len(results)):
-            return
-        media = results[int(pick) - 1]
+    try:
+        # Mode direct (ligne de commande)
+        media = None
+        if args.url:
+            parsed = parse_media_url(args.url)
+            if not parsed:
+                print_status("URL non reconnue (attendu .../series/<id> ou .../film/<id>).", "error")
+                return
+            from src.films.site import Media
+            media = Media({"id": parsed[1]}, media_type=parsed[0])
+        elif args.search:
+            results = site.search(args.search)
+            if not results:
+                print_status("Aucun résultat.", "error")
+                return
+            print_results(results)
+            pick = ask(f"Numéro (1-{len(results)}) : ")
+            if not (pick.isdigit() and 1 <= int(pick) <= len(results)):
+                return
+            media = results[int(pick) - 1]
 
-    if media is not None:
-        process(site, media, choose_dest(args.dest), args.season, args.episodes)
-        return
+        if media is not None:
+            process(site, media, choose_dest(args.dest), args.season, args.episodes)
+            return
 
-    # Mode interactif
-    while True:
-        media = choose_media(site)
-        if media is None:
-            break
-        process(site, media, choose_dest(args.dest), args.season, args.episodes)
-        if not yes("\nTélécharger autre chose ?", default=False):
-            break
-        print()
+        # Mode interactif
+        while True:
+            media = choose_media(site)
+            if media is None:
+                break
+            process(site, media, choose_dest(args.dest), args.season, args.episodes)
+            if not yes("\nTélécharger autre chose ?", default=False):
+                break
+            print()
+    finally:
+        if getattr(site, "browser", None) is not None:
+            site.browser.close()
+            site.browser = None
 
 
 def run(argv=None):

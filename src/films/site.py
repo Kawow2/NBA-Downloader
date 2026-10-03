@@ -127,7 +127,13 @@ class Site:
         self.last_status = None
         self.last_error = None
         self.impersonating = False
+        self.browser = None  # BrowserSession optionnel (transport API via navigateur)
         self.session = self._make_session()
+
+    def attach_browser(self, browser):
+        """Route les appels API par un navigateur (src/films/session.py) qui a
+        franchi Cloudflare, quand le cookie n'est pas réutilisable autrement."""
+        self.browser = browser
 
     # ------------------------------------------------------------------ HTTP
     def _headers(self):
@@ -166,6 +172,15 @@ class Site:
         return session
 
     def _get_json(self, path, params=None, referer=None):
+        # Transport par navigateur (il a franchi Cloudflare) : les appels API
+        # passent par un fetch() dans la page.
+        if self.browser is not None:
+            data = self.browser.get_json(path, params)
+            if data is not None:
+                self.last_status, self.last_error = 200, None
+            else:
+                self.last_status, self.last_error = None, "navigateur : réponse non-JSON"
+            return data
         url = path if path.startswith("http") else self.base + path
         extra = {"Referer": referer} if referer else None
         self.last_error = None

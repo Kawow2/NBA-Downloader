@@ -204,10 +204,18 @@ Playwright n'est à installer **qu'une fois** (le programme propose de le faire 
 .venv/bin/python -m pip install playwright && .venv/bin/python -m playwright install chromium
 ```
 
-- `--browser-visible` : navigateur **visible** si le challenge ne passe pas en invisible (nécessite un écran — utile sur un PC de bureau, pas sur un serveur sans affichage).
+Si Cloudflare bloque le mode **invisible** (il détecte souvent le navigateur headless), le programme bascule tout seul, puis :
+
+- **PC avec écran** : `--browser-visible` ouvre un vrai navigateur visible (passe le challenge bien plus souvent).
+- **Serveur Linux sans écran** : il relance automatiquement un navigateur visible **dans un écran virtuel** si ces deux-là sont installés :
+  ```bash
+  sudo apt install xvfb && .venv/bin/python -m pip install pyvirtualdisplay
+  ```
 - `--no-browser` : désactive le navigateur automatique.
 
-**Repli manuel** (Playwright indisponible, ex. serveur sans navigateur) : passe la session toi-même avec `--cookie "…" --user-agent "…"` (ou quand le programme le demande) — `F12 → Réseau` → une requête `/api/…` → en-tête `cookie` ; et `F12 → Console → navigator.userAgent`. Le `cf_clearance` est lié à ton IP + navigateur et expire ; c'est un secret, gardé en local, jamais commité.
+Si rien ne passe (API toujours franchie par le navigateur mais flux refusé), le navigateur **reste ouvert** et sert directement d'API le temps de la session.
+
+**Repli manuel** (Playwright indisponible) : passe la session toi-même avec `--cookie "…" --user-agent "…"` (ou quand le programme le demande) — `F12 → Réseau` → une requête `/api/…` → en-tête `cookie` ; et `F12 → Console → navigator.userAgent`. Le `cf_clearance` est lié à ton IP + navigateur et expire ; c'est un secret, gardé en local, jamais commité.
 
 ### Si « aucun lecteur trouvé »
 

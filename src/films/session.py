@@ -1,39 +1,53 @@
-"""Récupération AUTOMATIQUE de la session du site (cookie Cloudflare
-`cf_clearance` + `nk_verified`) via un navigateur **headless**, pour ne pas
-avoir à coller le cookie à la main.
+"""Session automatique du site (Cloudflare `cf_clearance` + `nk_verified`)
+via un **vrai navigateur** piloté par Playwright — pour ne jamais coller de
+cookie à la main.
 
-Pourquoi un navigateur : le site est derrière Cloudflare et son API n'ouvre
-qu'avec une session. `cf_clearance` est délivré après exécution du challenge
-JavaScript de Cloudflare et est lié à l'IP + au User-Agent ; aucun client
-HTTP « nu » ne peut le fabriquer. Un vrai Chromium, lui, passe le challenge
-tout seul, puis on récupère ses cookies + son User-Agent pour les donner au
-client HTTP habituel (curl_cffi) — qui, avec la bonne empreinte TLS, le bon
-UA et la même IP, est accepté par Cloudflare.
+Pourquoi : l'API n'ouvre qu'avec une session, et `cf_clearance` n'est délivré
+qu'après le challenge JavaScript de Cloudflare (lié à l'IP + au User-Agent).
+Aucun client HTTP ne peut le fabriquer ; un navigateur, si.
 
-Playwright est **optionnel** : s'il est absent, l'app retombe sur la saisie
-manuelle du cookie. Installation :
+`BrowserSession` fait deux choses :
+  1. ouvre le site, franchit Cloudflare (anti-détection ; repli en navigateur
+     visible sous écran virtuel Xvfb pour les serveurs sans affichage) ;
+  2. sert ensuite d'**API** : `get_json()` exécute le `fetch()` dans la page
+     (donc cookies + Cloudflare gérés par le navigateur). On peut aussi en
+     extraire les cookies + User-Agent pour les réutiliser avec le client
+     rapide (curl_cffi) quand Cloudflare l'accepte.
 
-    pip install playwright && playwright install chromium
+Playwright est optionnel :  pip install playwright && playwright install chromium
+Variable d'env facultative : FILMS_CHROMIUM_PATH = chemin d'un binaire Chrome/
+Chromium à utiliser (sinon celui de Playwright).
+"""
+import json
+import os
+import sys
+import time
+from urllib.parse import urlencode
+
+_PROBE_PATH = "/api/search/multi?query=a&page=1"
+
+# Réduit la détection « navigateur piloté » (navigator.webdriver, etc.).
+_STEALTH_JS = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+Object.defineProperty(navigator, 'languages', {get: () => ['fr-FR','fr','en-US','en']});
+Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+window.chrome = window.chrome || { runtime: {} };
 """
 
-# Déclenche la pose de la session (cf_clearance + nk_verified) côté serveur,
-# exactement comme l'app du site, et valide d'un coup que l'API répond du JSON.
-_PROBE_JS = """async (base) => {
+# fetch() exécuté DANS la page : cookies + Cloudflare gérés par le navigateur.
+_FETCH_JS = """async ({base, path}) => {
   try {
-    const r = await fetch(base + '/api/search/multi?query=a&page=1',
-                          {credentials: 'include', headers: {'accept': '*/*'}});
+    const r = await fetch(base + path, {credentials: 'include',
+                                        headers: {'accept': '*/*', 'x-profile-id': ''}});
     const ct = (r.headers.get('content-type') || '').toLowerCase();
-    const body = (await r.text()).slice(0, 80).trim().toLowerCase();
-    const json = ct.includes('json') || body.startsWith('{') || body.startsWith('[');
-    return {status: r.status, json: json};
-  } catch (e) {
-    return {status: 0, json: false, error: String(e)};
-  }
+    const body = await r.text();
+    return {status: r.status, ct: ct, body: body};
+  } catch (e) { return {status: 0, ct: '', body: '', error: String(e)}; }
 }"""
 
 
 def available():
-    """True si Playwright est importable (le navigateur peut être tenté)."""
+    """True si Playwright est importable."""
     try:
         import playwright  # noqa: F401
         return True
@@ -46,11 +60,9 @@ def install_hint():
 
 
 def install(status=None):
-    """Installe Playwright + le navigateur Chromium dans l'interpréteur
-    courant (le .venv quand lancé via start.sh/ps1). True si disponible
-    ensuite. À ne faire qu'une fois."""
+    """Installe Playwright + Chromium dans l'interpréteur courant (le .venv
+    quand lancé via start.sh/ps1). True si disponible ensuite."""
     import subprocess
-    import sys
 
     def say(msg, kind="info"):
         if status:
@@ -61,7 +73,7 @@ def install(status=None):
         subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright"])
         subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
     except Exception as e:
-        say(f"Installation échouée : {str(e)[:150]}. Faites-le à la main : {install_hint()}", "error")
+        say(f"Installation échouée : {str(e)[:150]}. À faire à la main : {install_hint()}", "error")
         return False
     import importlib
     importlib.invalidate_caches()
@@ -72,84 +84,166 @@ def install(status=None):
     return False
 
 
-def grab_session(base_url, headless=True, timeout=60, status=None):
-    """Ouvre base_url dans Chromium, laisse Cloudflare passer, déclenche un
-    appel API pour poser la session, puis renvoie (cookie_header, user_agent)
-    si l'API répond enfin du JSON — sinon None.
+def _looks_json(ct, body):
+    head = (body or "").lstrip()[:1]
+    return "json" in (ct or "") or head in ("{", "[")
 
-    `status` : fonction d'affichage optionnelle (print_status) ; sinon muet.
-    """
-    def say(msg, kind="info"):
-        if status:
-            status(msg, kind)
 
-    try:
-        from playwright.sync_api import sync_playwright
-    except Exception:
-        say("Playwright n'est pas installé : " + install_hint(), "warning")
-        return None
+class BrowserSession:
+    """Navigateur persistant qui franchit Cloudflare puis sert d'API."""
 
-    base = base_url.rstrip("/")
-    say(f"Navigateur {'invisible' if headless else 'visible'} : obtention de la session sur {base}…", "loading")
-    try:
-        with sync_playwright() as p:
-            try:
-                # --disable-blink-features=AutomationControlled : réduit la
-                # détection « navigateur piloté » par Cloudflare.
-                browser = p.chromium.launch(
-                    headless=headless,
-                    args=["--disable-blink-features=AutomationControlled"],
-                )
-            except Exception as e:
-                # Chromium pas installé pour Playwright.
-                say(f"Chromium introuvable pour Playwright ({str(e)[:80]}). "
-                    f"Lancez : playwright install chromium", "error")
-                return None
-            context = browser.new_context(
-                locale="fr-FR",
-                viewport={"width": 1280, "height": 800},
-            )
-            page = context.new_page()
-            try:
-                page.goto(base + "/", wait_until="domcontentloaded", timeout=timeout * 1000)
-            except Exception as e:
-                say(f"Chargement impossible : {str(e)[:100]}", "error")
-                browser.close()
-                return None
+    def __init__(self, base, status=None):
+        self.base = base.rstrip("/")
+        self._status = status
+        self._pw = None
+        self._browser = None
+        self._context = None
+        self._page = None
+        self._display = None
+        self.user_agent = None
 
-            user_agent = page.evaluate("() => navigator.userAgent")
+    def _say(self, msg, kind="info"):
+        if self._status:
+            self._status(msg, kind)
 
-            # Cloudflare pose cf_clearance en quelques secondes après l'exécution
-            # du challenge JS ; on sonde l'API en boucle (dans la page, donc
-            # cookies + CF gérés par le navigateur) jusqu'à obtenir du JSON.
-            import time
+    # ------------------------------------------------------------- ouverture
+    def open(self, headless=True, allow_xvfb=True, timeout=90):
+        """Ouvre le site et franchit Cloudflare. True quand l'API répond du
+        JSON. Repli automatique en navigateur visible sous Xvfb sur un serveur
+        Linux sans affichage."""
+        mode = "visible" if not headless else "invisible"
+        self._say(f"Navigateur {mode} : obtention de la session sur {self.base}…", "loading")
+        if self._try_open(headless=headless, timeout=timeout):
+            return True
+        self.close()
+        if headless and allow_xvfb and sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
+            if self._start_xvfb():
+                self._say("Nouvel essai en navigateur visible dans l'écran virtuel…", "loading")
+                if self._try_open(headless=False, timeout=timeout):
+                    return True
+                self.close()
+        return False
+
+    def _try_open(self, headless, timeout):
+        try:
+            if not self._launch(headless):
+                return False
+            self._context = self._browser.new_context(
+                locale="fr-FR", timezone_id="Europe/Paris",
+                viewport={"width": 1280, "height": 800})
+            self._context.add_init_script(_STEALTH_JS)
+            self._page = self._context.new_page()
+            self._page.goto(self.base + "/", wait_until="domcontentloaded", timeout=timeout * 1000)
+            self.user_agent = self._page.evaluate("() => navigator.userAgent")
             deadline = time.time() + timeout
-            got = False
             while time.time() < deadline:
-                try:
-                    res = page.evaluate(_PROBE_JS, base)
-                except Exception:
-                    res = {"status": 0, "json": False}
-                if res.get("json") and res.get("status") == 200:
-                    got = True
-                    break
-                page.wait_for_timeout(1500)
+                res = self._probe()
+                if res:
+                    self._say("Session obtenue par le navigateur ✅", "success")
+                    return True
+                self._page.wait_for_timeout(2000)
+            self._say("Challenge Cloudflare non franchi dans le temps imparti.", "warning")
+            return False
+        except Exception as e:
+            self._say(f"Navigateur : {str(e)[:150]}", "error")
+            return False
 
-            cookies = context.cookies()
-            browser.close()
+    def _launch(self, headless):
+        from playwright.sync_api import sync_playwright
+        if self._pw is None:
+            self._pw = sync_playwright().start()
+        args = ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+        exe = os.environ.get("FILMS_CHROMIUM_PATH")
+        attempts = []
+        if exe:
+            attempts.append({"headless": headless, "args": args, "executable_path": exe})
+        else:
+            # Vrai Chrome d'abord (meilleur passage Cloudflare), puis le
+            # Chromium de Playwright.
+            attempts.append({"headless": headless, "args": args, "channel": "chrome"})
+            attempts.append({"headless": headless, "args": args})
+        last = None
+        for kw in attempts:
+            try:
+                self._browser = self._pw.chromium.launch(**kw)
+                return True
+            except Exception as e:
+                last = e
+        self._say(f"Lancement du navigateur impossible : {str(last)[:120]}", "error")
+        return False
 
-        if not got:
-            say("Le navigateur n'a pas obtenu de session (challenge Cloudflare non résolu en headless ?).",
-                "warning")
-            if headless:
-                say("Essai possible en mode visible (--browser-visible) si vous avez un écran.", "info")
+    def _start_xvfb(self):
+        try:
+            from pyvirtualdisplay import Display
+        except Exception:
+            self._say("Serveur sans écran : pour un navigateur visible, installez un écran virtuel : "
+                      "sudo apt install xvfb && pip install pyvirtualdisplay", "warning")
+            return False
+        try:
+            self._display = Display(visible=0, size=(1280, 800))
+            self._display.start()
+            return True
+        except Exception as e:
+            self._say(f"Xvfb indisponible ({str(e)[:80]}) : sudo apt install xvfb", "warning")
+            return False
+
+    # ------------------------------------------------------------------ API
+    def _probe(self):
+        try:
+            res = self._page.evaluate(_FETCH_JS, {"base": self.base, "path": _PROBE_PATH})
+        except Exception:
+            return False
+        return res.get("status") == 200 and _looks_json(res.get("ct", ""), res.get("body", ""))
+
+    def get_json(self, path, params=None):
+        """Exécute GET base+path dans la page et renvoie le JSON, ou None."""
+        full = path
+        if params:
+            full = path + ("&" if "?" in path else "?") + urlencode(params)
+        try:
+            res = self._page.evaluate(_FETCH_JS, {"base": self.base, "path": full})
+        except Exception:
             return None
-
-        cookie_header = "; ".join(f"{c['name']}={c['value']}" for c in cookies if c.get("name"))
-        if not cookie_header:
-            return None
-        say("Session obtenue automatiquement ✅", "success")
-        return cookie_header, user_agent
-    except Exception as e:
-        say(f"Navigateur : {str(e)[:150]}", "error")
+        if res.get("status") == 200 and _looks_json(res.get("ct", ""), res.get("body", "")):
+            try:
+                return json.loads(res["body"])
+            except Exception:
+                return None
         return None
+
+    def cookies_and_ua(self):
+        try:
+            cookies = self._context.cookies()
+        except Exception:
+            cookies = []
+        header = "; ".join(f"{c['name']}={c['value']}" for c in cookies if c.get("name"))
+        return header, self.user_agent
+
+    def close(self):
+        for obj, meth in ((self._browser, "close"), (self._pw, "stop")):
+            try:
+                if obj:
+                    getattr(obj, meth)()
+            except Exception:
+                pass
+        self._browser = None
+        self._pw = None
+        if self._display:
+            try:
+                self._display.stop()
+            except Exception:
+                pass
+            self._display = None
+
+
+def grab_session(base_url, headless=True, timeout=90, status=None):
+    """Compat : ouvre un BrowserSession, renvoie (cookie_header, user_agent)
+    puis ferme. Préférer BrowserSession pour garder le navigateur ouvert."""
+    bs = BrowserSession(base_url, status=status)
+    try:
+        if not bs.open(headless=headless, timeout=timeout):
+            return None
+        cookie, ua = bs.cookies_and_ua()
+        return (cookie, ua) if cookie else None
+    finally:
+        bs.close()
