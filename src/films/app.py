@@ -288,6 +288,13 @@ def choose_quality():
     print_status(f"Qualité : {_quality_label(picked)}", "info")
 
 
+def maybe_choose_quality(args):
+    """Demande la qualité (après le choix du média), sauf si --quality est
+    fixé ou en mode non interactif."""
+    if sys.stdin.isatty() and not args.quality:
+        choose_quality()
+
+
 # ---------------------------------------------------------------- download
 def _no_sources_help(site, media, season=None, episode=None):
     what = f"S{season:02d}E{episode:02d}" if season else "ce film"
@@ -476,10 +483,6 @@ def main():
         print_status("Sans session valide, l'API ne renvoie rien.", "error")
         return
 
-    # Qualité : demandée une fois ici (sauf si fixée par --quality).
-    if sys.stdin.isatty() and not args.quality:
-        choose_quality()
-
     try:
         # Mode direct (ligne de commande)
         media = None
@@ -502,6 +505,7 @@ def main():
             media = results[int(pick) - 1]
 
         if media is not None:
+            maybe_choose_quality(args)
             process(site, media, choose_dest(args.dest), args.season, args.episodes)
             return
 
@@ -510,6 +514,7 @@ def main():
             media = choose_media(site)
             if media is None:
                 break
+            maybe_choose_quality(args)
             process(site, media, choose_dest(args.dest), args.season, args.episodes)
             if not yes("\nTélécharger autre chose ?", default=False):
                 break

@@ -165,7 +165,7 @@ Films et séries depuis **[nakios.rent](https://nakios.rent)** (l'API du site es
 4. **Chemin** : Entrée = dossier Films & Séries, ou un autre chemin.
 5. **Téléchargement** en `.mp4` : le programme récupère les lecteurs du média et prend le **premier qui fonctionne** (les autres servent de secours). Les fichiers déjà présents sont ignorés ; relancer reprend ce qui manque.
 
-La **qualité max** est demandée en début de session (720p / 1080p / 1440p / 4K / meilleure) et mémorisable ; le programme prend ensuite la meilleure qualité **sous ce plafond** selon ce que propose la source. `--quality 720|1080|1440|2160|best` la fixe sans la demander, et le réglage `9` la change durablement.
+La **qualité max** est demandée **juste après le choix du film/série** (720p / 1080p / 1440p / 4K / meilleure) et mémorisable ; le programme prend ensuite la meilleure qualité **sous ce plafond** selon ce que propose la source. `--quality 720|1080|1440|2160|best` la fixe sans la demander, et le réglage `9` la change durablement. Note : pour une source en **fichier direct** (un seul `.mp4`), la résolution est celle du fichier et ne dépend pas du plafond.
 
 ## Organisation pour Plex
 
