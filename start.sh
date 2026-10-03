@@ -2,11 +2,12 @@
 # Anime & NBA Downloader - Linux/macOS launcher: runs main.py in a virtual
 # environment (.venv), created on first run.
 #
-#   ./start.sh                  menu: Anime or NBA
+#   ./start.sh                  menu: Anime, NBA or Films & Séries
 #   ./start.sh --tmux           same, inside a tmux session (over SSH: the
 #                               downloads keep going if the connection drops;
 #                               come back with ./start.sh --tmux again)
 #   ./start.sh nba --url "https://basketball-video.com/..."
+#   ./start.sh films --url "https://nakios.rent/series/87108"
 #
 # Manual equivalent:
 #   python3 -m venv .venv && . .venv/bin/activate
@@ -14,10 +15,12 @@
 
 # Folders (Plex libraries) for this launcher, e.g.
 #   CHEMIN_ANIME="/srv/plex/Anime"   CHEMIN_NBA="/srv/plex/NBA"
+#   CHEMIN_FILMS="/srv/plex"   (contient Films/ et Séries/ = 2 bibliothèques)
 # Empty: the folders chosen in the program's menu (Réglages), asked the
 # first time each category is used.
 CHEMIN_ANIME=""
 CHEMIN_NBA=""
+CHEMIN_FILMS=""
 
 cd "$(dirname "$0")" || exit 1
 
@@ -72,6 +75,7 @@ fi
 ARGS=()
 [ -n "$CHEMIN_ANIME" ] && ARGS+=(--anime-dir "$CHEMIN_ANIME")
 [ -n "$CHEMIN_NBA" ] && ARGS+=(--nba-dir "$CHEMIN_NBA")
+[ -n "$CHEMIN_FILMS" ] && ARGS+=(--films-dir "$CHEMIN_FILMS")
 if [ -n "$START_SH_IN_TMUX" ]; then
     "$VENV_PY" main.py "${ARGS[@]}" "$@"
     echo

@@ -5,3 +5,9 @@ av
 pycryptodome
 yt-dlp[default,curl-cffi]
 cloudscraper
+
+# Optionnel — Films & Séries : récupération automatique de la session
+# Cloudflare via un navigateur headless. À installer une seule fois avec :
+#   pip install playwright && playwright install chromium
+# (le programme le propose au premier lancement si absent)
+# playwright
