@@ -7,6 +7,8 @@ Lancé depuis le menu de main.py (src/launcher.py), ou directement :
     python main.py films --search "Inception"    recherche directe
     python main.py films --url https://nakios.rent/series/87108
     python main.py films --url .../series/87108 --season 1 --episodes 1-5
+    python main.py films --export-session         (PC avec navigateur) imprime un jeton de session
+    python main.py films --import-session JETON   (serveur SSH) importe ce jeton
     python main.py films --debug                 enregistre les réponses dans ./debug
 
 Le téléchargement réutilise tout le pipeline du module NBA (extracteurs
@@ -14,6 +16,7 @@ voe/uqload/filemoon/vidmoly/sibnet…, yt-dlp, multi-connexions, fusion,
 faststart Plex).
 """
 import argparse
+import base64
 import json
 import os
 import re
@@ -432,6 +435,70 @@ def process(site, media, dest, cli_season=None, cli_episodes=None):
     return process_movie(site, media, dest)
 
 
+# ----------------------------------------------------- session SSH / headless
+# Le serveur Plex (portable Linux en SSH) n'a pas de navigateur. On capture la
+# session sur une machine QUI EN A UN (le PC fixe, même IP publique que le
+# serveur, donc le cf_clearance y est valable), puis on la transfère via un
+# jeton à coller sur le serveur.
+_SESSION_KEYS = ("films_cookie", "films_user_agent", "films_api_base",
+                 "films_profile_id", "films_extra_headers")
+
+
+def export_session(browser_visible):
+    """(sur une machine avec navigateur) Récupère la session via le navigateur
+    et renvoie un jeton base64 contenant tout ce qu'il faut (cookie, UA, base
+    d'API, profil, en-têtes), ou None."""
+    from src.films import session as browser_session
+    if not browser_session.available():
+        if sys.stdin.isatty() and yes("Playwright est requis pour capturer la session. L'installer "
+                                       "maintenant (~1 min) ?", default=True):
+            browser_session.install(status=print_status)
+    if not browser_session.available():
+        print_status("Playwright indisponible : " + browser_session.install_hint(), "error")
+        return None
+    site = Site()
+    bs = browser_session.BrowserSession(site.base, status=print_status)
+    if not bs.open(headless=not browser_visible):
+        bs.close()
+        print_status("Cloudflare non franchi. Sur un PC avec écran, réessaie avec --browser-visible.", "error")
+        return None
+    cookie, ua = bs.cookies_and_ua()
+    headers = getattr(bs, "api_headers", None) or {}
+    api_base = getattr(bs, "api_base", None)
+    bs.close()
+    pid = next((v for k, v in headers.items() if k.lower() == "x-profile-id"), None)
+    extra = {k: v for k, v in headers.items() if k.lower() != "x-profile-id"}
+    bundle = {"films_cookie": cookie, "films_user_agent": ua, "films_api_base": api_base,
+              "films_profile_id": pid, "films_extra_headers": json.dumps(extra) if extra else None,
+              "site": site.base}
+    return base64.urlsafe_b64encode(json.dumps(bundle).encode()).decode()
+
+
+def import_session(token):
+    """(sur le serveur SSH) Importe le jeton généré par --export-session."""
+    try:
+        raw = base64.urlsafe_b64decode(token.strip().encode())
+        bundle = json.loads(raw.decode())
+        assert isinstance(bundle, dict)
+    except Exception:
+        print_status("Jeton invalide. Recopie toute la ligne affichée par --export-session.", "error")
+        return
+    if bundle.get("site"):
+        set_setting("films_site_url", str(bundle["site"]).rstrip("/"))
+    for key in _SESSION_KEYS:
+        if bundle.get(key) is not None:
+            set_setting(key, bundle[key])
+    print_status("Session importée ✅ (cookie, User-Agent, base d'API, profil).", "success")
+    site = Site()
+    ok, reason = site.probe_session()
+    if ok:
+        print_status("Vérifiée : l'API répond. Tu peux lancer les téléchargements (--no-browser conseillé).",
+                     "success")
+    else:
+        print_status(f"⚠️ L'API ne répond pas encore ({reason}). Vérifie que le PC fixe et le serveur sont "
+                     "sur le MÊME réseau (même IP publique), et réexporte un jeton frais si besoin.", "warning")
+
+
 # -------------------------------------------------------------------- main
 def main():
     global _default_dir_override
@@ -452,6 +519,10 @@ def main():
                         help="Ne pas tenter le navigateur headless pour obtenir la session automatiquement")
     parser.add_argument("--browser-visible", action="store_true",
                         help="Navigateur visible (si le challenge Cloudflare ne passe pas en invisible ; nécessite un écran)")
+    parser.add_argument("--export-session", action="store_true",
+                        help="(machine AVEC navigateur) capture la session et imprime un jeton à importer sur le serveur SSH")
+    parser.add_argument("--import-session", metavar="JETON",
+                        help="(serveur SSH SANS navigateur) importe le jeton généré par --export-session")
     parser.add_argument("--sources-path", help="Endpoint des lecteurs, ex. /api/movie/{id}/sources (mémorisé)")
     parser.add_argument("--quality", choices=["480", "720", "1080", "1440", "2160", "best"],
                         help="Qualité max (défaut 1080, mémorisée)")
@@ -479,6 +550,20 @@ def main():
         set_setting("films_quality", args.quality)
     if args.threads:
         set_setting("films_threads", args.threads)
+
+    # Transfert de session vers un serveur sans navigateur (SSH / headless).
+    if args.import_session:
+        import_session(args.import_session)
+        return
+    if args.export_session:
+        token = export_session(args.browser_visible)
+        if token:
+            print_separator(title="JETON DE SESSION")
+            print_status("Sur le serveur (SSH), colle cette commande :", "info")
+            print(f"\n   python main.py films --import-session {token}\n")
+            print_status("Le cookie expire au bout de quelques jours : réexporte un jeton quand l'API "
+                         "recommence à refuser.", "info")
+        return
 
     quality = str(get_setting("films_quality") or "1080")
     configure(max_height=None if quality == "best" else int(quality),

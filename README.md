@@ -220,6 +220,28 @@ Si rien ne passe (API toujours franchie par le navigateur mais flux refusé), le
 
 **Repli manuel** (Playwright indisponible) : passe la session toi-même avec `--cookie "…" --user-agent "…"` (ou quand le programme le demande) — `F12 → Réseau` → une requête `/api/…` → en-tête `cookie` ; et `F12 → Console → navigator.userAgent`. Le `cf_clearance` est lié à ton IP + navigateur et expire ; c'est un secret, gardé en local, jamais commité.
 
+### Serveur Plex en SSH (sans navigateur) → jeton de session
+
+Un serveur headless (portable Linux auquel tu te connectes en SSH) n'a pas de navigateur pour franchir Cloudflare. Comme le `cf_clearance` est lié à l'**IP publique**, capture la session sur une **machine du même réseau qui a un navigateur** (ton PC fixe) et transfère-la :
+
+1. **Sur le PC fixe** (même réseau que le serveur) :
+   ```
+   python main.py films --export-session          # (ou --export-session --browser-visible)
+   ```
+   Un navigateur s'ouvre, franchit Cloudflare, et le programme imprime une commande `--import-session <jeton>` (le jeton contient cookie, User-Agent, base d'API, profil).
+2. **Sur le serveur** (SSH), colle la commande affichée :
+   ```
+   python main.py films --import-session <jeton>
+   ```
+   Le serveur mémorise la session et vérifie que l'API répond. Ensuite, télécharge normalement — ajoute `--no-browser` pour qu'il n'essaie jamais d'ouvrir un navigateur :
+   ```
+   ./start.sh films --no-browser
+   ```
+
+Le cookie expire au bout de quelques jours (ou si ton IP publique change) : refais l'étape 1 + 2 avec un jeton frais. Le jeton est un secret (il contient ta session) — transfère-le par ton SSH, ne le partage pas.
+
+> Alternative sans jeton : `ssh -X` avec un serveur X sur le PC fixe (VcXsrv sous Windows, XQuartz sous macOS) affiche le navigateur de `--browser-visible` sur ton écran à travers le SSH.
+
 ### Si « aucun lecteur trouvé »
 
 La **recherche**, les **détails** et la **liste des saisons/épisodes** suivent l'API TMDB (trouvées automatiquement). En revanche, l'endpoint qui renvoie les **lecteurs vidéo** est propre au site : plusieurs chemins courants sont essayés, mais s'ils échouent, indiquez le bon :
