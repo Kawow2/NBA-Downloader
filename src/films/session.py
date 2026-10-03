@@ -35,10 +35,11 @@ window.chrome = window.chrome || { runtime: {} };
 """
 
 # fetch() exécuté DANS la page : cookies + Cloudflare gérés par le navigateur.
-_FETCH_JS = """async ({base, path}) => {
+# `headers` = en-têtes capturés sur un vrai appel de l'appli (x-profile-id…).
+_FETCH_JS = """async ({base, path, headers}) => {
   try {
-    const r = await fetch(base + path, {credentials: 'include',
-                                        headers: {'accept': '*/*', 'x-profile-id': ''}});
+    const h = Object.assign({'accept': '*/*'}, headers || {});
+    const r = await fetch(base + path, {credentials: 'include', headers: h});
     const ct = (r.headers.get('content-type') || '').toLowerCase();
     const body = await r.text();
     return {status: r.status, ct: ct, body: body};
@@ -101,28 +102,50 @@ class BrowserSession:
         self._page = None
         self._display = None
         self.user_agent = None
+        self._api_ok = False
+        self.api_headers = {}   # en-têtes capturés sur un vrai appel API de l'appli
 
     def _say(self, msg, kind="info"):
         if self._status:
             self._status(msg, kind)
 
     # ------------------------------------------------------------- ouverture
-    def open(self, headless=True, allow_xvfb=True, timeout=90):
+    def open(self, headless=True, allow_xvfb=True, timeout=None):
         """Ouvre le site et franchit Cloudflare. True quand l'API répond du
         JSON. Repli automatique en navigateur visible sous Xvfb sur un serveur
         Linux sans affichage."""
         mode = "visible" if not headless else "invisible"
         self._say(f"Navigateur {mode} : obtention de la session sur {self.base}…", "loading")
-        if self._try_open(headless=headless, timeout=timeout):
+        t = timeout or (60 if headless else 180)
+        if self._try_open(headless=headless, timeout=t):
             return True
         self.close()
         if headless and allow_xvfb and sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
             if self._start_xvfb():
                 self._say("Nouvel essai en navigateur visible dans l'écran virtuel…", "loading")
-                if self._try_open(headless=False, timeout=timeout):
+                if self._try_open(headless=False, timeout=180):
                     return True
                 self.close()
         return False
+
+    def _on_response(self, response):
+        """Repère le premier appel API réussi de l'appli du site et en capture
+        les en-têtes utiles (x-profile-id, authorization…) pour les rejouer."""
+        if self._api_ok:
+            return
+        try:
+            if "/api/" in response.url and response.status == 200 \
+                    and "json" in (response.headers.get("content-type") or "").lower():
+                req = response.request.headers
+                keep = {}
+                for k, v in req.items():
+                    kl = k.lower()
+                    if kl == "authorization" or (kl.startswith("x-") and kl != "x-requested-with"):
+                        keep[k] = v
+                self.api_headers = keep
+                self._api_ok = True
+        except Exception:
+            pass
 
     def _try_open(self, headless, timeout):
         try:
@@ -133,16 +156,29 @@ class BrowserSession:
                 viewport={"width": 1280, "height": 800})
             self._context.add_init_script(_STEALTH_JS)
             self._page = self._context.new_page()
+            self._api_ok = False
+            # On détecte la session en observant les vrais appels API de la
+            # page (plus fiable qu'un fetch synthétique : l'appli ajoute ses
+            # propres en-têtes, ex. x-profile-id).
+            self._page.on("response", self._on_response)
             self._page.goto(self.base + "/", wait_until="domcontentloaded", timeout=timeout * 1000)
             self.user_agent = self._page.evaluate("() => navigator.userAgent")
+            if not headless:
+                self._say("➡️  Dans la fenêtre : passe la vérification Cloudflare et attends que le site "
+                          "s'affiche ; si rien ne vient, lance une recherche sur le site. Je détecte la "
+                          "session et je continue tout seul (ne ferme pas la fenêtre).", "info")
             deadline = time.time() + timeout
+            warned = False
             while time.time() < deadline:
-                res = self._probe()
-                if res:
+                if self._api_ok or self._probe():
                     self._say("Session obtenue par le navigateur ✅", "success")
                     return True
-                self._page.wait_for_timeout(2000)
-            self._say("Challenge Cloudflare non franchi dans le temps imparti.", "warning")
+                self._page.wait_for_timeout(1500)
+                if not headless and not warned and time.time() > deadline - timeout + 50:
+                    self._say("Toujours en attente — vérifie que le site est affiché, et fais une recherche "
+                              "dessus pour forcer la détection.", "warning")
+                    warned = True
+            self._say("Session non détectée dans le temps imparti.", "warning")
             return False
         except Exception as e:
             self._say(f"Navigateur : {str(e)[:150]}", "error")
@@ -188,22 +224,24 @@ class BrowserSession:
             return False
 
     # ------------------------------------------------------------------ API
-    def _probe(self):
+    def _fetch(self, path):
         try:
-            res = self._page.evaluate(_FETCH_JS, {"base": self.base, "path": _PROBE_PATH})
+            return self._page.evaluate(
+                _FETCH_JS, {"base": self.base, "path": path, "headers": self.api_headers or {}})
         except Exception:
-            return False
+            return {"status": 0, "ct": "", "body": ""}
+
+    def _probe(self):
+        res = self._fetch(_PROBE_PATH)
         return res.get("status") == 200 and _looks_json(res.get("ct", ""), res.get("body", ""))
 
     def get_json(self, path, params=None):
-        """Exécute GET base+path dans la page et renvoie le JSON, ou None."""
+        """Exécute GET base+path dans la page (avec les en-têtes capturés) et
+        renvoie le JSON, ou None."""
         full = path
         if params:
             full = path + ("&" if "?" in path else "?") + urlencode(params)
-        try:
-            res = self._page.evaluate(_FETCH_JS, {"base": self.base, "path": full})
-        except Exception:
-            return None
+        res = self._fetch(full)
         if res.get("status") == 200 and _looks_json(res.get("ct", ""), res.get("body", "")):
             try:
                 return json.loads(res["body"])

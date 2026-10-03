@@ -152,6 +152,16 @@ class Site:
         cookie = get_setting("films_cookie")
         if cookie:
             headers["Cookie"] = cookie
+        # En-têtes propres à l'appli capturés par le navigateur (authorization,
+        # autres x-…), rejoués pour que l'API réponde du JSON.
+        extra = get_setting("films_extra_headers")
+        if extra:
+            try:
+                data = json.loads(extra) if isinstance(extra, str) else extra
+                if isinstance(data, dict):
+                    headers.update({str(k): str(v) for k, v in data.items()})
+            except Exception:
+                pass
         return headers
 
     def _make_session(self):

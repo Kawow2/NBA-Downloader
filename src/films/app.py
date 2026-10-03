@@ -14,6 +14,7 @@ voe/uqload/filemoon/vidmoly/sibnet…, yt-dlp, multi-connexions, fusion,
 faststart Plex).
 """
 import argparse
+import json
 import os
 import re
 import sys
@@ -110,10 +111,21 @@ def ensure_session(site, interactive, use_browser=True, browser_visible=False):
         if browser_session.available():
             bs = browser_session.BrowserSession(site.base, status=print_status)
             if bs.open(headless=not browser_visible):
-                # a) réutiliser le cookie avec le client rapide (curl_cffi).
+                # Capturer les en-têtes propres à l'appli (x-profile-id…) vus
+                # sur un vrai appel : sans eux l'API renvoie du HTML.
+                captured = getattr(bs, "api_headers", None) or {}
+                if captured:
+                    pid = next((v for k, v in captured.items() if k.lower() == "x-profile-id"), None)
+                    if pid is not None:
+                        set_setting("films_profile_id", pid)
+                    extra = {k: v for k, v in captured.items() if k.lower() != "x-profile-id"}
+                    set_setting("films_extra_headers", json.dumps(extra))
+                # a) réutiliser cookie + en-têtes avec le client rapide (curl_cffi).
                 cookie, ua = bs.cookies_and_ua()
                 if cookie:
                     site.set_credentials(cookie=cookie, user_agent=ua)
+                else:
+                    site.session = site._make_session()  # relire profile-id / extra-headers
                 ok, _ = site.probe_session()
                 if ok:
                     bs.close()
