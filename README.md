@@ -188,20 +188,26 @@ Créez une bibliothèque Plex **Films** (agent « Films ») sur `<dossier>/Films
 | `--quality 720\|1080\|1440\|2160\|best` | qualité max (défaut 1080p, mémorisée) |
 | `--threads <N>` | morceaux/connexions en parallèle (défaut 32, mémorisé) |
 | `--site <URL>` | si le site change de domaine (mémorisé) |
-| `--cookie "<cookie>"` / `--user-agent "<ua>"` | cookie de session et User-Agent du navigateur (mémorisés) — voir ci-dessous |
+| `--browser-visible` / `--no-browser` | navigateur de session visible / désactivé (voir ci-dessous) |
+| `--cookie "<cookie>"` / `--user-agent "<ua>"` | session passée à la main (repli, mémorisés) — voir ci-dessous |
 | `--profile-id <id>` | valeur de l'en-tête `x-profile-id` (mémorisée) |
 | `--sources-path <gabarit>` | endpoint des lecteurs, ex. `/api/movie/{id}/sources` (mémorisé) |
 | `--debug` | enregistre les réponses de l'API dans `./debug` |
 
-### Cookie de session (Cloudflare)
+### Session (Cloudflare) — automatique
 
-Le site est derrière **Cloudflare** et son API n'ouvre qu'avec une **session** (le `credentials: include` du site). Au premier lancement, le programme **demande le cookie** et le mémorise dans `config.json` (non versionné) :
+Le site est derrière **Cloudflare** et son API n'ouvre qu'avec une **session** (le `credentials: include` du site). Le programme s'en occupe **tout seul** : au lancement, il ouvre un **navigateur headless** ([Playwright](https://playwright.dev)) qui passe Cloudflare, récupère les cookies (`cf_clearance`, `nk_verified`) et le User-Agent, les mémorise dans `config.json` (non versionné) et les **renouvelle automatiquement** à l'expiration. **Aucun cookie à coller.**
 
-1. Sur le site dans **ton** navigateur (même machine que le programme), `F12 → Réseau` → une requête `/api/…` → en-tête **`cookie`** → copie toute la valeur.
-2. `F12 → Console` → tape `navigator.userAgent` → copie le résultat.
-3. Colle les deux quand le programme les demande (ou passe-les avec `--cookie "…" --user-agent "…"`).
+Playwright n'est à installer **qu'une fois** (le programme propose de le faire au premier lancement), sinon à la main :
 
-Le cookie `cf_clearance` est lié à **ton IP et à ton navigateur** et **expire** au bout de quelques jours : quand l'API recommence à répondre du HTML, reprends un cookie frais (le programme le redemande). C'est un secret : il reste en local, il n'est jamais commité.
+```bash
+.venv/bin/python -m pip install playwright && .venv/bin/python -m playwright install chromium
+```
+
+- `--browser-visible` : navigateur **visible** si le challenge ne passe pas en invisible (nécessite un écran — utile sur un PC de bureau, pas sur un serveur sans affichage).
+- `--no-browser` : désactive le navigateur automatique.
+
+**Repli manuel** (Playwright indisponible, ex. serveur sans navigateur) : passe la session toi-même avec `--cookie "…" --user-agent "…"` (ou quand le programme le demande) — `F12 → Réseau` → une requête `/api/…` → en-tête `cookie` ; et `F12 → Console → navigator.userAgent`. Le `cf_clearance` est lié à ton IP + navigateur et expire ; c'est un secret, gardé en local, jamais commité.
 
 ### Si « aucun lecteur trouvé »
 

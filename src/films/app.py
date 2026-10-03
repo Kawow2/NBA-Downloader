@@ -84,23 +84,53 @@ def parse_selection(text, available):
 
 
 # ---------------------------------------------------------------- session
-def ensure_session(site, interactive):
-    """S'assure que l'API répond du JSON. Sinon, en interactif, demande le
-    cookie de session (+ User-Agent) et réessaie : le site est derrière
-    Cloudflare et exige une session (le « credentials: include » du site).
-    Le cookie est mémorisé dans config.json (non versionné) ; à refaire
-    seulement quand il expire."""
+BROWSER_HINT = "pip install playwright && playwright install chromium"
+
+
+def ensure_session(site, interactive, use_browser=True, browser_visible=False):
+    """S'assure que l'API répond du JSON, dans cet ordre :
+      1. test direct (cookie déjà mémorisé, encore valide) ;
+      2. récupération AUTOMATIQUE via un navigateur headless (Playwright) qui
+         passe Cloudflare tout seul — aucun cookie à coller ;
+      3. en dernier recours (interactif), saisie manuelle du cookie.
+    Le cookie obtenu est mémorisé (config.json, non versionné) et, comme ce
+    test tourne à chaque lancement, il est renouvelé automatiquement quand il
+    expire."""
     ok, reason = site.probe_session()
     if ok:
         return True
+
+    # 2) Automatique : un vrai navigateur (Playwright) va chercher la session.
+    if use_browser:
+        from src.films import session as browser_session
+        if not browser_session.available() and interactive:
+            if yes("Installer Playwright pour récupérer la session automatiquement "
+                   "(télécharge un navigateur, ~1 min, une seule fois) ?", default=True):
+                browser_session.install(status=print_status)
+        if browser_session.available():
+            creds = browser_session.grab_session(site.base, headless=not browser_visible,
+                                                  status=print_status)
+            if creds:
+                site.set_credentials(cookie=creds[0], user_agent=creds[1])
+                ok, reason = site.probe_session()
+                if ok:
+                    print_status("Session automatique OK ✅ (mémorisée, renouvelée seule à l'expiration).",
+                                 "success")
+                    return True
+                print_status(f"Session récupérée mais l'API répond encore : {reason}", "warning")
+        elif interactive:
+            print_status(f"Astuce : installez Playwright pour automatiser la session ({BROWSER_HINT}).", "info")
+
+    # 3) Manuel (dernier recours).
     if not interactive:
         if reason:
             print_status(reason, "error")
-        print_status("Passe le cookie avec --cookie \"...\" (et --user-agent \"...\").", "info")
+        print_status(f"Passe --cookie \"...\" (+ --user-agent \"...\"), ou installe Playwright pour "
+                     f"tout automatiser ({BROWSER_HINT}).", "info")
         return False
     print_status(reason or "L'API exige une session.", "warning")
-    print_status(f"{site.host} est derrière Cloudflare et demande une session — à récupérer dans TON "
-                 "navigateur (même machine que ce programme) :", "info")
+    print_status(f"{site.host} est derrière Cloudflare — récupère la session dans TON navigateur "
+                 "(même machine) :", "info")
     while True:
         print(f"   {Colors.DIM}1. F12 → onglet Réseau → une requête /api/… → en-tête « cookie » "
               f"(copie TOUTE la valeur).{Colors.ENDC}")
@@ -113,7 +143,7 @@ def ensure_session(site, interactive):
         site.set_credentials(cookie=cookie, user_agent=ua or None)
         ok, reason = site.probe_session()
         if ok:
-            print_status("Session OK ✅ — mémorisée (à refaire seulement quand elle expirera).", "success")
+            print_status("Session OK ✅ — mémorisée.", "success")
             return True
         print_status(f"Toujours bloqué : {reason}", "error")
         print_status("Le cookie est lié à ton IP et à ton navigateur et il expire : reprends un cookie "
@@ -325,6 +355,10 @@ def main():
     parser.add_argument("--profile-id", help="Valeur de l'en-tête x-profile-id (mémorisée)")
     parser.add_argument("--cookie", help="En-tête Cookie de session, si l'API l'exige (mémorisé)")
     parser.add_argument("--user-agent", help="User-Agent du navigateur ayant obtenu le cookie (mémorisé)")
+    parser.add_argument("--no-browser", action="store_true",
+                        help="Ne pas tenter le navigateur headless pour obtenir la session automatiquement")
+    parser.add_argument("--browser-visible", action="store_true",
+                        help="Navigateur visible (si le challenge Cloudflare ne passe pas en invisible ; nécessite un écran)")
     parser.add_argument("--sources-path", help="Endpoint des lecteurs, ex. /api/movie/{id}/sources (mémorisé)")
     parser.add_argument("--quality", choices=["480", "720", "1080", "1440", "2160", "best"],
                         help="Qualité max (défaut 1080, mémorisée)")
@@ -367,8 +401,9 @@ def main():
 
     # Le site exige une session (Cloudflare + credentials: include) : vérifier
     # tout de suite, et demander le cookie une fois si besoin.
-    if not ensure_session(site, sys.stdin.isatty()):
-        print_status("Sans session valide, l'API ne renvoie rien. Relance quand tu as le cookie.", "error")
+    if not ensure_session(site, sys.stdin.isatty(), use_browser=not args.no_browser,
+                          browser_visible=args.browser_visible):
+        print_status("Sans session valide, l'API ne renvoie rien.", "error")
         return
 
     # Mode direct (ligne de commande)
