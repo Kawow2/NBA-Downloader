@@ -565,6 +565,8 @@ def main():
                         help="dossier de profil navigateur persistant (garde la session Cloudflare entre deux lancements)")
     parser.add_argument("--no-profile", action="store_true",
                         help="ne pas utiliser de profil persistant (session navigateur éphémère)")
+    parser.add_argument("--refresh-session", action="store_true",
+                        help="rafraîchit la session (navigateur si besoin) puis quitte — pour une tâche planifiée sur le serveur")
     parser.add_argument("--sources-path", help="Endpoint des lecteurs, ex. /api/movie/{id}/sources (mémorisé)")
     parser.add_argument("--quality", choices=["480", "720", "1080", "1440", "2160", "best"],
                         help="Qualité max (défaut 1080, mémorisée)")
@@ -617,6 +619,15 @@ def main():
     print(f"  {Colors.DIM}Qualité : {quality_label} · {SETTINGS['threads']} téléchargements en parallèle{Colors.ENDC}")
     ffmpeg_hint()
     print()
+
+    # Rafraîchissement seul (tâche planifiée sur le serveur) : garde la session
+    # valide puis quitte, sans rien télécharger.
+    if args.refresh_session:
+        ok = ensure_session(site, sys.stdin.isatty(), use_browser=not args.no_browser,
+                            browser_visible=args.browser_visible, profile_dir=profile_dir)
+        print_status("Session à jour ✅" if ok else "Échec du rafraîchissement de la session.",
+                     "success" if ok else "error")
+        return
 
     # Le site exige une session (Cloudflare + credentials: include) : vérifier
     # tout de suite, et demander le cookie une fois si besoin.
