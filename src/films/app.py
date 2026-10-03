@@ -252,6 +252,42 @@ def choose_dest(cli_dest):
     return path
 
 
+_QUALITY_OPTIONS = [
+    ("1", "720", "720p"),
+    ("2", "1080", "1080p (Full HD)"),
+    ("3", "1440", "1440p (2K)"),
+    ("4", "2160", "2160p (4K)"),
+    ("5", "best", "Meilleure disponible (peut être lourd)"),
+]
+
+
+def _quality_label(value):
+    return "la meilleure disponible" if value == "best" else f"{value}p max"
+
+
+def choose_quality():
+    """Demande la qualité max pour ce téléchargement et l'applique. La
+    meilleure qualité SOUS ce plafond est ensuite choisie selon ce que propose
+    la source (certaines sources n'ont pas mieux que 720p/1080p)."""
+    current = str(get_setting("films_quality") or "1080")
+    print(f"\n{Colors.BOLD}{Colors.HEADER}🎚️  QUALITÉ MAX{Colors.ENDC}")
+    for num, val, label in _QUALITY_OPTIONS:
+        mark = f"{Colors.OKGREEN}  ← actuel{Colors.ENDC}" if val == current else ""
+        print(f"  {Colors.BOLD}{num}.{Colors.ENDC} {label}{mark}")
+    print(f"  {Colors.DIM}La meilleure qualité sous ce plafond est prise selon ce que propose la source.{Colors.ENDC}")
+    choice = ask(f"Choix (1-5, Entrée = {_quality_label(current)}) : ").strip().lower()
+    picked = current
+    for num, val, _label in _QUALITY_OPTIONS:
+        if choice in (num, val):
+            picked = val
+            break
+    configure(max_height=None if picked == "best" else int(picked),
+              threads=get_setting("films_threads") or 32)
+    if picked != current and yes(f"Garder « {_quality_label(picked)} » par défaut ?", default=True):
+        set_setting("films_quality", picked)
+    print_status(f"Qualité : {_quality_label(picked)}", "info")
+
+
 # ---------------------------------------------------------------- download
 def _no_sources_help(site, media, season=None, episode=None):
     what = f"S{season:02d}E{episode:02d}" if season else "ce film"
@@ -439,6 +475,10 @@ def main():
                           browser_visible=args.browser_visible):
         print_status("Sans session valide, l'API ne renvoie rien.", "error")
         return
+
+    # Qualité : demandée une fois ici (sauf si fixée par --quality).
+    if sys.stdin.isatty() and not args.quality:
+        choose_quality()
 
     try:
         # Mode direct (ligne de commande)
