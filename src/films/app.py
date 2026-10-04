@@ -217,8 +217,12 @@ class NakiosProvider:
         self.site = site
         self.base = site.base
 
-    def search(self, query):
-        res = self.site.search(query)
+    def search(self, query, kind=None):
+        # Si on cible un type (film/série), on demande plus de résultats au
+        # « multi » puis on filtre, pour quand même remplir ~10 du bon type.
+        res = self.site.search(query, limit=40 if kind else 20)
+        if kind:
+            res = [m for m in res if m.media_type == kind]
         for m in res:
             m.provider = self
         return res
@@ -246,14 +250,24 @@ def build_providers(site, nakios_ready):
     return providers
 
 
-def search_all(providers, query, per_source=10):
+def _parse_kind(text):
+    """'f'/'film'… -> 'movie', 's'/'série'… -> 'tv', sinon None (les deux)."""
+    t = (text or "").strip().lower()
+    if t in ("f", "film", "films", "movie", "movies", "m"):
+        return "movie"
+    if t in ("s", "serie", "série", "series", "séries", "tv", "show", "shows"):
+        return "tv"
+    return None
+
+
+def search_all(providers, query, per_source=10, kind=None):
     """Recherche agrégée : au plus `per_source` résultats par fournisseur
     (10 par défaut, soit ~20 au total avec deux sites), regroupés par source
-    dans l'ordre des fournisseurs."""
+    dans l'ordre des fournisseurs. `kind` ('movie'/'tv') ne garde que ce type."""
     out = []
     for prov in providers:
         try:
-            res = prov.search(query) or []
+            res = prov.search(query, kind=kind) or []
         except Exception as e:
             print_status(f"{prov.label} : recherche impossible ({str(e)[:80]})", "warning")
             continue
@@ -300,8 +314,10 @@ def choose_media(providers):
         query = choice if choice not in ("1", "") else ask("Recherche (titre du film ou de la série) : ")
         if not query:
             continue
-        print_status(f"Recherche de « {query} » sur {len(providers)} site(s)...", "loading")
-        results = search_all(providers, query)
+        kind = _parse_kind(ask("Film ou série ? (f = film, s = série, Entrée = les deux) : "))
+        what = {"movie": "films", "tv": "séries"}.get(kind, "films & séries")
+        print_status(f"Recherche de « {query} » ({what}) sur {len(providers)} site(s)...", "loading")
+        results = search_all(providers, query, kind=kind)
         if not results:
             print_status("Aucun résultat.", "error")
             continue
@@ -756,6 +772,8 @@ def main():
                                      description="Télécharge des films et séries en .mp4 pour Plex.")
     parser.add_argument("--url", help="URL d'un film / d'une série (ex. https://nakios.rent/series/87108)")
     parser.add_argument("--search", help="Recherche directe par titre")
+    parser.add_argument("--kind", choices=["film", "serie", "série", "movie", "tv"],
+                        help="Limite la recherche aux films ou aux séries (défaut : les deux)")
     parser.add_argument("--season", help="Saison(s) pour une série (ex. 1, 1-3, all)")
     parser.add_argument("--episodes", help="Épisode(s) (ex. 1-5, 1,3,5, all)")
     parser.add_argument("--dest", help="Dossier de destination (sinon le chemin par défaut)")
@@ -888,7 +906,7 @@ def main():
                              "ou le fournisseur correspondant n'est pas actif.", "error")
                 return
         elif args.search:
-            results = search_all(providers, args.search)
+            results = search_all(providers, args.search, kind=_parse_kind(args.kind))
             if not results:
                 print_status("Aucun résultat.", "error")
                 return

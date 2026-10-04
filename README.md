@@ -164,7 +164,7 @@ Une **recherche interroge les deux sites à la fois** : chaque résultat est ét
 
 ## Déroulement
 
-1. **Menu** : `1` = rechercher un film ou une série. On peut aussi coller directement une URL `nakios.rent` (`.../series/<id>`, `.../film/<id>`) ou zone-telechargement (`.../?p=film&id=<id>-<slug>`).
+1. **Menu** : `1` = rechercher. Après le titre, le programme demande si tu veux un **film**, une **série** ou **les deux** (`f` / `s` / Entrée) pour ne garder que ce type. On peut aussi coller directement une URL `nakios.rent` (`.../series/<id>`, `.../film/<id>`) ou zone-telechargement (`.../?p=film&id=<id>-<slug>`).
 2. **Résultat** : les résultats sont **regroupés par source** (un en-tête par site, ~**10 par source**, soit jusqu'à 20 au total avec les deux), chaque ligne indiquant **Film** ou **Série** et l'année. Choisir le numéro (la numérotation est globale, 1..N).
 3. **Série** : choisir la/les **saison(s)** (ex. `1`, `1-3`, Entrée = toutes), puis les **épisodes** (ex. `1-5`, `1,3,5`, Entrée = tous).
 4. **Chemin** : Entrée = dossier Films & Séries, ou un autre chemin.
@@ -189,6 +189,7 @@ Créez une bibliothèque Plex **Films** (agent « Films ») sur `<dossier>/Films
 | Option | Rôle |
 | --- | --- |
 | `--search "<titre>"` | recherche directe |
+| `--kind film\|serie` | limite la recherche aux films ou aux séries (défaut : les deux) |
 | `--url <URL>` | film / série directement (nakios `.../series/<id>`, `.../film/<id>` ou zone `.../?p=film&id=<id>-<slug>`) |
 | `--alldebrid-key "<clé>"` | clé API AllDebrid pour activer zone-telechargement (mémorisée en local, **jamais commitée**) |
 | `--zone-site <URL>` | si zone-telechargement change de domaine (mémorisé) |
