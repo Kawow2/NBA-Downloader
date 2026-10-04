@@ -165,7 +165,7 @@ Une **recherche interroge les deux sites à la fois** : chaque résultat est ét
 ## Déroulement
 
 1. **Menu** : `1` = rechercher un film ou une série. On peut aussi coller directement une URL `nakios.rent` (`.../series/<id>`, `.../film/<id>`) ou zone-telechargement (`.../?p=film&id=<id>-<slug>`).
-2. **Résultat** : choisir le numéro ; chaque ligne indique **Film** ou **Série**, l'année et la **source** (`[Nakios]` / `[Zone-Téléchargement]`).
+2. **Résultat** : les résultats sont **regroupés par source** (un en-tête par site, ~**10 par source**, soit jusqu'à 20 au total avec les deux), chaque ligne indiquant **Film** ou **Série** et l'année. Choisir le numéro (la numérotation est globale, 1..N).
 3. **Série** : choisir la/les **saison(s)** (ex. `1`, `1-3`, Entrée = toutes), puis les **épisodes** (ex. `1-5`, `1,3,5`, Entrée = tous).
 4. **Chemin** : Entrée = dossier Films & Séries, ou un autre chemin.
 5. **Lecteur / qualité** : si le titre propose **plusieurs lecteurs**, la liste s'affiche (`lecteur · qualité · langue`, ex. `Uqload · 1080p · VOSTFR`) pour en choisir un, ou `0` = auto. Ils sont classés **meilleure qualité d'abord** ; pour une série, le choix est demandé **une fois** et s'applique à tous les épisodes. S'il n'y a qu'un lecteur (souvent un seul fichier par titre), rien n'est demandé.

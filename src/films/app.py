@@ -246,14 +246,18 @@ def build_providers(site, nakios_ready):
     return providers
 
 
-def search_all(providers, query):
-    """Recherche agrégée sur tous les fournisseurs (résultats étiquetés)."""
+def search_all(providers, query, per_source=10):
+    """Recherche agrégée : au plus `per_source` résultats par fournisseur
+    (10 par défaut, soit ~20 au total avec deux sites), regroupés par source
+    dans l'ordre des fournisseurs."""
     out = []
     for prov in providers:
         try:
-            out.extend(prov.search(query))
+            res = prov.search(query) or []
         except Exception as e:
             print_status(f"{prov.label} : recherche impossible ({str(e)[:80]})", "warning")
+            continue
+        out.extend(res[:per_source])
     return out
 
 
@@ -312,13 +316,23 @@ def choose_media(providers):
 
 
 def print_results(results):
+    """Affiche les résultats regroupés par source (un en-tête par site), en
+    gardant une numérotation globale 1..N pour la sélection."""
     print_separator(title="RÉSULTATS")
+    counts = {}
+    for m in results:
+        p = getattr(m, "provider", None)
+        counts[id(p)] = counts.get(id(p), 0) + 1
+    last = object()
     for i, m in enumerate(results, 1):
+        prov_obj = getattr(m, "provider", None)
+        if prov_obj is not last:
+            last = prov_obj
+            label = getattr(prov_obj, "label", "") or "Source"
+            print(f"\n  {Colors.HEADER}{Colors.BOLD}— {label} ({counts.get(id(prov_obj), 0)}) —{Colors.ENDC}")
         tag = f"{Colors.MAGENTA}Série{Colors.ENDC}" if m.is_series else f"{Colors.OKCYAN}Film{Colors.ENDC}"
         y = f" {Colors.DIM}({m.year}){Colors.ENDC}" if m.year else ""
-        prov = getattr(getattr(m, "provider", None), "label", "")
-        provtag = f" {Colors.DIM}[{prov}]{Colors.ENDC}" if prov else ""
-        print(f"  {Colors.BOLD}{i:>2}.{Colors.ENDC} [{tag}] {m.title}{y}{provtag}")
+        print(f"  {Colors.BOLD}{i:>2}.{Colors.ENDC} [{tag}] {m.title}{y}")
     print_separator()
 
 
