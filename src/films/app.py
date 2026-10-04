@@ -22,13 +22,30 @@ import os
 import re
 import sys
 
-from src.var import Colors, print_status, print_separator
+import requests
+from tqdm import tqdm
+
+from src.var import Colors, DEFAULT_USER_AGENT, print_status, print_separator
 from src.utils.config.config import get_setting, set_setting
 from src.utils.check.check_ffmpeg_installed import check_ffmpeg_installed
 from src.utils.check.check_folder import folder_problem
+from src.utils.mp4_faststart import ensure_faststart
 from src.films.site import Site, parse_media_url
 from src.films import plex
+from src.nba import fast_http
 from src.nba.downloader import download_part, configure, SETTINGS, ffmpeg_hint, temp_files
+
+_VIDEO_EXTS = (".mp4", ".mkv", ".avi", ".m4v", ".webm", ".mov")
+
+
+def _already_downloaded(out_path):
+    """Chemin d'un fichier vidéo déjà présent pour ce média (toute extension),
+    ou None. Évite de retélécharger un .mkv (débrideur) nommé en .mp4."""
+    base = os.path.splitext(out_path)[0]
+    for ext in _VIDEO_EXTS:
+        if os.path.exists(base + ext):
+            return base + ext
+    return None
 
 FALLBACK_DEFAULT_DIR = os.path.join(os.path.expanduser("~"), "Videos", "Films")
 
@@ -189,31 +206,100 @@ def ensure_session(site, interactive, use_browser=True, browser_visible=False, p
             return False
 
 
+# ------------------------------------------------------------ fournisseurs
+class NakiosProvider:
+    """Fournisseur streaming nakios (enveloppe src/films/site.Site)."""
+    name = "nakios"
+    label = "Nakios"
+    debrid = None
+
+    def __init__(self, site):
+        self.site = site
+        self.base = site.base
+
+    def search(self, query):
+        res = self.site.search(query)
+        for m in res:
+            m.provider = self
+        return res
+
+    def details(self, media):
+        return self.site.details(media)
+
+    def episodes(self, media, season):
+        return self.site.episodes(media, season)
+
+    def sources(self, media, season=None, episode=None):
+        return self.site.sources(media, season=season, episode=episode)
+
+
+def build_providers(site, nakios_ready):
+    """Fournisseurs actifs : nakios (si session OK) + zone-telechargement (si
+    une clé AllDebrid est configurée)."""
+    providers = []
+    if nakios_ready:
+        providers.append(NakiosProvider(site))
+    if get_setting("films_alldebrid_apikey"):
+        from src.films.zonetelechargement import Zone
+        from src.films.alldebrid import AllDebrid
+        providers.append(Zone(debrid=AllDebrid()))
+    return providers
+
+
+def search_all(providers, query):
+    """Recherche agrégée sur tous les fournisseurs (résultats étiquetés)."""
+    out = []
+    for prov in providers:
+        try:
+            out.extend(prov.search(query))
+        except Exception as e:
+            print_status(f"{prov.label} : recherche impossible ({str(e)[:80]})", "warning")
+    return out
+
+
+def media_from_url(url, providers):
+    """Reconnaît une URL collée (nakios .../series|film/<id>, ou zone
+    .../?p=film&id=…) et renvoie un média rattaché au bon fournisseur."""
+    from src.films.site import Media
+    parsed = parse_media_url(url)
+    nak = next((p for p in providers if p.name == "nakios"), None)
+    if parsed and nak:
+        m = Media({"id": parsed[1]}, media_type=parsed[0])
+        m.provider = nak
+        return m
+    mz = re.search(r'[?&]p=film&id=(\d+)-([a-z0-9\-]+)', url, re.I)
+    zone = next((p for p in providers if p.name == "zone"), None)
+    if mz and zone:
+        m = Media({"id": mz.group(1), "title": re.sub(r"[-_]+", " ", mz.group(2)).title()}, media_type="movie")
+        m.provider = zone
+        m.url = f"/?p=film&id={mz.group(1)}-{mz.group(2)}"
+        return m
+    return None
+
+
 # ---------------------------------------------------------------- recherche
-def choose_media(site):
+def choose_media(providers):
     while True:
         print(f"{Colors.BOLD}Que voulez-vous faire ?{Colors.ENDC}")
         print("  1. Rechercher un film ou une série")
-        print(f"  {Colors.DIM}(ou collez directement une URL {site.host} — q pour quitter){Colors.ENDC}")
+        print(f"  {Colors.DIM}(ou collez une URL d'un des sites — q pour quitter){Colors.ENDC}")
         choice = ask("Choix : ")
         if choice.lower() in ("q", "quit", "exit"):
             return None
         if choice.startswith("http"):
-            parsed = parse_media_url(choice)
-            if not parsed:
-                print_status("URL non reconnue (attendu .../series/<id> ou .../film/<id>).", "error")
-                continue
-            from src.films.site import Media
-            media_type, media_id = parsed
-            return Media({"id": media_id}, media_type=media_type)
+            media = media_from_url(choice, providers)
+            if media:
+                return media
+            print_status("URL non reconnue.", "error")
+            continue
 
         query = choice if choice not in ("1", "") else ask("Recherche (titre du film ou de la série) : ")
         if not query:
             continue
-        print_status(f"Recherche de « {query} »...", "loading")
-        results = site.search(query)
+        print_status(f"Recherche de « {query} » sur {len(providers)} site(s)...", "loading")
+        results = search_all(providers, query)
         if not results:
-            print_status("Aucun résultat (ou l'API a refusé la requête).", "error")
+            print_status("Aucun résultat.", "error")
             continue
         print_results(results)
         while True:
@@ -230,7 +316,9 @@ def print_results(results):
     for i, m in enumerate(results, 1):
         tag = f"{Colors.MAGENTA}Série{Colors.ENDC}" if m.is_series else f"{Colors.OKCYAN}Film{Colors.ENDC}"
         y = f" {Colors.DIM}({m.year}){Colors.ENDC}" if m.year else ""
-        print(f"  {Colors.BOLD}{i:>2}.{Colors.ENDC} [{tag}] {m.title}{y}")
+        prov = getattr(getattr(m, "provider", None), "label", "")
+        provtag = f" {Colors.DIM}[{prov}]{Colors.ENDC}" if prov else ""
+        print(f"  {Colors.BOLD}{i:>2}.{Colors.ENDC} [{tag}] {m.title}{y}{provtag}")
     print_separator()
 
 
@@ -256,11 +344,14 @@ def choose_dest(cli_dest):
 
 
 # ---------------------------------------------------------------- download
-def _no_sources_help(site, media, season=None, episode=None):
+def _no_sources_help(provider, media, season=None, episode=None):
     what = f"S{season:02d}E{episode:02d}" if season else "ce film"
     print_status(f"Aucun lecteur trouvé pour {what}.", "error")
+    if getattr(provider, "name", None) != "nakios":
+        print_status(f"Aucun lien de téléchargement exploitable sur cette page ({provider.base}).", "info")
+        return
     print_status("L'endpoint des lecteurs est propre au site et n'a pas été deviné. Pour le fixer :", "info")
-    print(f"   {Colors.DIM}1. Ouvrez le média sur {site.base} et lancez la lecture (F12 → onglet Réseau).{Colors.ENDC}")
+    print(f"   {Colors.DIM}1. Ouvrez le média sur {provider.base} et lancez la lecture (F12 → onglet Réseau).{Colors.ENDC}")
     print(f"   {Colors.DIM}2. Repérez la requête /api/... qui renvoie les lecteurs (voe, uqload, .m3u8…).{Colors.ENDC}")
     print(f"   {Colors.DIM}3. Réglages → « endpoint des lecteurs », en remplaçant l'id par {{id}} "
           f"(et {{season}}/{{episode}} pour les séries).{Colors.ENDC}")
@@ -303,20 +394,128 @@ def _ordered_sources(sources, prefer):
     return sorted(sources, key=score, reverse=True)
 
 
-def download_media(site, media, out_path, season=None, episode=None, prefer=None, sources=None):
-    """Télécharge le premier lecteur qui fonctionne (ordonné selon `prefer`)."""
-    if os.path.exists(out_path):
-        print_status(f"Déjà présent : {out_path}", "success")
+# ----------------------------------------------------- téléchargement débridé
+_ARCHIVE_RX = re.compile(r"\.(rar|zip|7z|r\d{2}|\d{3}|part\d+\.rar|tar|gz|bz2)$", re.I)
+
+
+def _is_archive(name):
+    return bool(_ARCHIVE_RX.search(name or ""))
+
+
+def _debrid_out_path(out_path, filename):
+    """Garde le nom rangé pour Plex, mais l'extension réelle du fichier débridé
+    (souvent .mkv en 4K/BluRay)."""
+    ext = os.path.splitext(filename or "")[1].lower()
+    if ext in _VIDEO_EXTS:
+        return os.path.splitext(out_path)[0] + ext
+    return out_path
+
+
+def _fetch_simple(url, tmp, headers, size=None):
+    """Repli : téléchargement en une seule connexion (hébergeur refusant les
+    requêtes par plage)."""
+    try:
+        with requests.get(url, headers=headers, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            total = size or int(r.headers.get("Content-Length") or 0)
+            bar = tqdm(total=total or None, unit="B", unit_scale=True, unit_divisor=1024,
+                       desc="📥 Téléchargement")
+            with open(tmp, "wb") as f:
+                for chunk in r.iter_content(chunk_size=512 * 1024):
+                    if chunk:
+                        f.write(chunk)
+                        bar.update(len(chunk))
+            bar.close()
+        return True
+    except (requests.RequestException, OSError) as e:
+        print_status(f"Téléchargement direct échoué : {str(e)[:120]}", "error")
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def _fetch_direct(url, out_path, size=None):
+    """Télécharge un lien direct (débrideur) : multi-connexions, repli sur une
+    connexion simple ; faststart Plex pour les .mp4. True si le fichier est en
+    place."""
+    tmp = out_path + ".part"
+    headers = {"User-Agent": DEFAULT_USER_AGENT}
+    label = "📥 " + os.path.basename(out_path)
+    if not fast_http.download(url, tmp, headers, SETTINGS["threads"], label=label):
+        if not _fetch_simple(url, tmp, headers, size):
+            return False
+    try:
+        os.replace(tmp, out_path)
+    except OSError as e:
+        print_status(f"Impossible de finaliser le fichier ({e}).", "error")
+        return False
+    if out_path.lower().endswith(".mp4") and SETTINGS.get("faststart", True):
+        ensure_faststart(out_path)
+    return True
+
+
+def _download_via_debrid(provider, src, out_path):
+    """Source « téléchargement » (zone + débrideur) : récupère les liens
+    dl-protect de la page, débloque le premier qui marche via le débrideur,
+    puis télécharge le fichier direct. Renvoie le chemin final (avec l'extension
+    réelle) ou None."""
+    debrid = getattr(provider, "debrid", None)
+    if debrid is None or not getattr(debrid, "configured", False):
+        print_status("Aucune clé AllDebrid configurée : impossible de débrider ce lien "
+                     "(relance avec --alldebrid-key \"VOTRE_CLÉ\").", "error")
+        return None
+    links = provider.download_links(getattr(src, "url", None))
+    if not links:
+        print_status("Aucun lien de téléchargement trouvé sur la page.", "error")
+        return None
+    last_err = None
+    for link in links:
+        try:
+            direct, filename, size = debrid.resolve(link)
+        except Exception as e:
+            last_err = str(e)[:160]
+            continue
+        final = _debrid_out_path(out_path, filename)
+        existing = _already_downloaded(final)
+        if existing:
+            print_status(f"Déjà présent : {existing}", "success")
+            return existing
+        if _is_archive(filename):
+            print_status(f"« {filename} » est une archive (rar/zip…) ; la décompression "
+                         "automatique n'est pas encore gérée — je la récupère telle quelle.", "warning")
+        gb = f" ({int(size) / 1024 ** 3:.2f} Go)" if size else ""
+        print_status(f"Lien débridé : {filename or 'fichier'}{gb}", "success")
+        if _fetch_direct(direct, final, size=int(size) if size else None):
+            return final
+        last_err = "téléchargement du lien direct échoué"
+    if last_err:
+        print_status(f"Déblocage impossible : {last_err}", "error")
+    return None
+
+
+def download_media(provider, media, out_path, season=None, episode=None, prefer=None, sources=None):
+    """Télécharge le premier lecteur qui fonctionne (ordonné selon `prefer`).
+    Les sources « téléchargement » (zone) passent par le débrideur."""
+    existing = _already_downloaded(out_path)
+    if existing:
+        print_status(f"Déjà présent : {existing}", "success")
         return True
     if sources is None:
-        sources = site.sources(media, season=season, episode=episode)
+        sources = provider.sources(media, season=season, episode=episode)
     if not sources:
-        _no_sources_help(site, media, season, episode)
+        _no_sources_help(provider, media, season, episode)
         return False
     ordered = _ordered_sources(sources, prefer)
     for i, src in enumerate(ordered, 1):
         print_separator(title=f"LECTEUR {i}/{len(ordered)} · {src.describe()}")
-        if download_part(src.url, out_path, page_url=site.base + "/"):
+        if getattr(src, "needs_debrid", False):
+            final = _download_via_debrid(provider, src, out_path)
+            if final:
+                print_status(f"Enregistré : {final}", "success")
+                return True
+        elif download_part(src.url, out_path, page_url=provider.base + "/"):
             print_status(f"Enregistré : {out_path}", "success")
             return True
         print_status(f"Échec sur « {src.describe()} », lecteur suivant…", "warning")
@@ -324,29 +523,30 @@ def download_media(site, media, out_path, season=None, episode=None, prefer=None
     return False
 
 
-def process_movie(site, media, dest):
-    media, _ = site.details(media)
+def process_movie(provider, media, dest):
+    media, _ = provider.details(media)
     print(f"\n{Colors.BOLD}{Colors.OKGREEN}🎬 {media.title}{Colors.ENDC}"
           + (f"  {Colors.DIM}({media.year}){Colors.ENDC}" if media.year else ""))
     folder, stem = plex.movie_target(dest, media.title, media.year)
     out_path = os.path.join(folder, stem + ".mp4")
     print_status(f"Fichier : {out_path}", "info")
-    if os.path.exists(out_path):
-        print_status(f"Déjà présent : {out_path}", "success")
+    existing = _already_downloaded(out_path)
+    if existing:
+        print_status(f"Déjà présent : {existing}", "success")
         return True
-    sources = site.sources(media)
+    sources = provider.sources(media)
     if not sources:
-        _no_sources_help(site, media)
+        _no_sources_help(provider, media)
         clean_temp_files(folder, stem, keep_own=True)
         return False
     prefer = choose_source(sources, sys.stdin.isatty())
-    ok = download_media(site, media, out_path, prefer=prefer, sources=sources)
+    ok = download_media(provider, media, out_path, prefer=prefer, sources=sources)
     clean_temp_files(folder, stem, keep_own=not ok)
     return ok
 
 
-def process_series(site, media, dest, cli_season=None, cli_episodes=None):
-    media, seasons = site.details(media)
+def process_series(provider, media, dest, cli_season=None, cli_episodes=None):
+    media, seasons = provider.details(media)
     print(f"\n{Colors.BOLD}{Colors.OKGREEN}📺 {media.title}{Colors.ENDC}"
           + (f"  {Colors.DIM}({media.year}){Colors.ENDC}" if media.year else ""))
     if not seasons:
@@ -372,7 +572,7 @@ def process_series(site, media, dest, cli_season=None, cli_episodes=None):
     prefer = None          # lecteur préféré, choisi une seule fois
     asked_source = False
     for sn in season_numbers:
-        episodes = site.episodes(media, sn)
+        episodes = provider.episodes(media, sn)
         if not episodes:
             print_status(f"Saison {sn} : aucun épisode listé.", "error")
             failed += 1
@@ -395,18 +595,19 @@ def process_series(site, media, dest, cli_season=None, cli_episodes=None):
             ep = by_num[en]
             folder, stem = plex.series_target(dest, media.title, sn, en, media.year, ep.title)
             out_path = os.path.join(folder, stem + ".mp4")
-            if os.path.exists(out_path):
-                print_status(f"Déjà présent : {out_path}", "success")
+            existing = _already_downloaded(out_path)
+            if existing:
+                print_status(f"Déjà présent : {existing}", "success")
                 continue
             print_separator(title=f"S{sn:02d}E{en:02d}" + (f" · {ep.title}" if ep.title else ""))
             # Choix du lecteur/qualité une seule fois (sur le 1er épisode à
             # télécharger), puis appliqué à tous les suivants.
             ep_sources = None
             if not asked_source:
-                ep_sources = site.sources(media, season=sn, episode=en)
+                ep_sources = provider.sources(media, season=sn, episode=en)
                 prefer = choose_source(ep_sources, sys.stdin.isatty())
                 asked_source = True
-            if not download_media(site, media, out_path, season=sn, episode=en,
+            if not download_media(provider, media, out_path, season=sn, episode=en,
                                   prefer=prefer, sources=ep_sources):
                 failed += 1
             clean_temp_files(folder, stem, keep_own=True)
@@ -429,10 +630,10 @@ def clean_temp_files(folder, stem, keep_own=False):
             pass
 
 
-def process(site, media, dest, cli_season=None, cli_episodes=None):
+def process(provider, media, dest, cli_season=None, cli_episodes=None):
     if media.is_series:
-        return process_series(site, media, dest, cli_season, cli_episodes)
-    return process_movie(site, media, dest)
+        return process_series(provider, media, dest, cli_season, cli_episodes)
+    return process_movie(provider, media, dest)
 
 
 # ----------------------------------------------------- session SSH / headless
@@ -547,6 +748,10 @@ def main():
     parser.add_argument("--default-dir", metavar="CHEMIN", help="Chemin par défaut pour cette session (dossier Films du menu)")
     parser.add_argument("--set-default-dir", metavar="CHEMIN", help="Définit le chemin par défaut puis quitte")
     parser.add_argument("--site", help="URL du site si le domaine change (mémorisée)")
+    parser.add_argument("--alldebrid-key", metavar="CLÉ",
+                        help="Clé API AllDebrid pour débrider zone-telechargement (mémorisée, jamais commitée)")
+    parser.add_argument("--zone-site", metavar="URL",
+                        help="URL du site zone-telechargement si le domaine change (mémorisée)")
     parser.add_argument("--profile-id", help="Valeur de l'en-tête x-profile-id (mémorisée)")
     parser.add_argument("--cookie", help="En-tête Cookie de session, si l'API l'exige (mémorisé)")
     parser.add_argument("--user-agent", help="User-Agent du navigateur ayant obtenu le cookie (mémorisé)")
@@ -585,6 +790,16 @@ def main():
         _default_dir_override = os.path.expanduser(args.default_dir)
     if args.site:
         set_setting("films_site_url", args.site.rstrip("/"))
+    if args.zone_site:
+        set_setting("films_zone_site_url", args.zone_site.rstrip("/"))
+    if args.alldebrid_key:
+        set_setting("films_alldebrid_apikey", args.alldebrid_key.strip())
+        from src.films.alldebrid import AllDebrid, AllDebridError
+        try:
+            who = AllDebrid().check()
+            print_status(f"Clé AllDebrid enregistrée ✅ (compte : {who}).", "success")
+        except AllDebridError as e:
+            print_status(f"Clé AllDebrid enregistrée, mais la vérification a échoué : {e}", "warning")
     if args.profile_id is not None:
         set_setting("films_profile_id", args.profile_id)
     if args.cookie:
@@ -632,25 +847,34 @@ def main():
                      "success" if ok else "error")
         return
 
-    # Le site exige une session (Cloudflare + credentials: include) : vérifier
-    # tout de suite, et demander le cookie une fois si besoin.
-    if not ensure_session(site, sys.stdin.isatty(), use_browser=not args.no_browser,
-                          browser_visible=args.browser_visible, profile_dir=profile_dir):
-        print_status("Sans session valide, l'API ne renvoie rien.", "error")
+    # Nakios (streaming) exige une session Cloudflare : on l'obtient si possible,
+    # mais ce n'est plus bloquant — zone-telechargement (+ AllDebrid) peut suffire
+    # à lui seul, et inversement.
+    nakios_ready = ensure_session(site, sys.stdin.isatty(), use_browser=not args.no_browser,
+                                  browser_visible=args.browser_visible, profile_dir=profile_dir)
+    if not nakios_ready:
+        print_status("Nakios (streaming) indisponible pour l'instant (session non obtenue).", "warning")
+
+    providers = build_providers(site, nakios_ready)
+    if not providers:
+        print_status("Aucune source active : ni session Nakios, ni clé AllDebrid pour "
+                     "zone-telechargement. Configure au moins l'une des deux "
+                     "(--alldebrid-key \"VOTRE_CLÉ\").", "error")
         return
+    print_status("Sources actives : " + ", ".join(p.label for p in providers) + ".", "info")
+    print()
 
     try:
         # Mode direct (ligne de commande)
         media = None
         if args.url:
-            parsed = parse_media_url(args.url)
-            if not parsed:
-                print_status("URL non reconnue (attendu .../series/<id> ou .../film/<id>).", "error")
+            media = media_from_url(args.url, providers)
+            if media is None:
+                print_status("URL non reconnue (nakios .../series|film/<id>, ou zone .../?p=film&id=…), "
+                             "ou le fournisseur correspondant n'est pas actif.", "error")
                 return
-            from src.films.site import Media
-            media = Media({"id": parsed[1]}, media_type=parsed[0])
         elif args.search:
-            results = site.search(args.search)
+            results = search_all(providers, args.search)
             if not results:
                 print_status("Aucun résultat.", "error")
                 return
@@ -661,15 +885,15 @@ def main():
             media = results[int(pick) - 1]
 
         if media is not None:
-            process(site, media, choose_dest(args.dest), args.season, args.episodes)
+            process(media.provider, media, choose_dest(args.dest), args.season, args.episodes)
             return
 
         # Mode interactif
         while True:
-            media = choose_media(site)
+            media = choose_media(providers)
             if media is None:
                 break
-            process(site, media, choose_dest(args.dest), args.season, args.episodes)
+            process(media.provider, media, choose_dest(args.dest), args.season, args.episodes)
             if not yes("\nTélécharger autre chose ?", default=False):
                 break
             print()

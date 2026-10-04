@@ -4,7 +4,7 @@ Un seul programme, un menu au démarrage :
 
 - **🎌 Anime** : le téléchargeur Anime-Sama / Nakanime de [SertraFurr/anime-sama-nakanime-downloader](https://github.com/SertraFurr/anime-sama-nakanime-downloader) (documentation plus bas), avec en plus des **téléchargements en parallèle** ;
 - **🏀 NBA** : les replays de [basketball-video.com](https://basketball-video.com) en **.mp4** rangés et nommés pour Plex ;
-- **🎬 Films & Séries** : films et séries de [nakios.rent](https://nakios.rent) en **.mp4**, rangés en bibliothèques Plex **Films** et **Séries**.
+- **🎬 Films & Séries** : films et séries de [nakios.rent](https://nakios.rent) (streaming) **et** de zone-telechargement (téléchargement direct via un débrideur, pour la 4K / BluRay / REMUX) en **.mp4**, rangés en bibliothèques Plex **Films** et **Séries**. Une seule recherche interroge **les deux sites** et propose toutes les qualités trouvées.
 
 Chaque catégorie a **son propre dossier** (sa bibliothèque Plex), demandé la première fois qu'on l'utilise et modifiable dans **Réglages**.
 
@@ -155,12 +155,17 @@ Si le site est derrière Cloudflare, le programme demande le cookie `cf_clearanc
 
 # 🎬 Films & Séries
 
-Films et séries depuis **[nakios.rent](https://nakios.rent)** (l'API du site est au format TMDB), en `.mp4` prêts pour Plex. Le téléchargement réutilise tout le moteur de la partie NBA (extracteurs VOE / Uqload / Filemoon / Vidmoly / Sibnet…, yt-dlp, multi-connexions, fusion, faststart).
+Films et séries depuis **deux sources complémentaires**, en `.mp4` prêts pour Plex :
+
+- **[nakios.rent](https://nakios.rent)** — **streaming** (API au format TMDB). Films **et** séries. Le téléchargement réutilise tout le moteur de la partie NBA (extracteurs VOE / Uqload / Filemoon / Vidmoly / Sibnet…, yt-dlp, multi-connexions, fusion, faststart).
+- **zone-telechargement** — **téléchargement direct** (liens 1fichier / Uptobox / Rapidgator… protégés par dl-protect). Qualités souvent bien meilleures (**BluRay, 4K, REMUX**). Nécessite une **clé [AllDebrid](https://alldebrid.com)** qui transforme les liens protégés en liens directs pleine vitesse. Films seulement pour l'instant.
+
+Une **recherche interroge les deux sites à la fois** : chaque résultat est étiqueté par sa source (`[Nakios]` / `[Zone-Téléchargement]`), et pour le titre choisi la liste des qualités disponibles s'affiche, **meilleure d'abord**. Chaque source reste utilisable seule : sans session Nakios mais avec une clé AllDebrid, seul zone-telechargement est actif, et inversement.
 
 ## Déroulement
 
-1. **Menu** : `1` = rechercher un film ou une série. On peut aussi coller directement une URL `nakios.rent` (`.../series/<id>` ou `.../film/<id>`).
-2. **Résultat** : choisir le numéro ; chaque ligne indique **Film** ou **Série** et l'année.
+1. **Menu** : `1` = rechercher un film ou une série. On peut aussi coller directement une URL `nakios.rent` (`.../series/<id>`, `.../film/<id>`) ou zone-telechargement (`.../?p=film&id=<id>-<slug>`).
+2. **Résultat** : choisir le numéro ; chaque ligne indique **Film** ou **Série**, l'année et la **source** (`[Nakios]` / `[Zone-Téléchargement]`).
 3. **Série** : choisir la/les **saison(s)** (ex. `1`, `1-3`, Entrée = toutes), puis les **épisodes** (ex. `1-5`, `1,3,5`, Entrée = tous).
 4. **Chemin** : Entrée = dossier Films & Séries, ou un autre chemin.
 5. **Lecteur / qualité** : si le titre propose **plusieurs lecteurs**, la liste s'affiche (`lecteur · qualité · langue`, ex. `Uqload · 1080p · VOSTFR`) pour en choisir un, ou `0` = auto. Ils sont classés **meilleure qualité d'abord** ; pour une série, le choix est demandé **une fois** et s'applique à tous les épisodes. S'il n'y a qu'un lecteur (souvent un seul fichier par titre), rien n'est demandé.
@@ -184,7 +189,9 @@ Créez une bibliothèque Plex **Films** (agent « Films ») sur `<dossier>/Films
 | Option | Rôle |
 | --- | --- |
 | `--search "<titre>"` | recherche directe |
-| `--url <URL>` | film / série directement (`.../series/<id>`, `.../film/<id>`) |
+| `--url <URL>` | film / série directement (nakios `.../series/<id>`, `.../film/<id>` ou zone `.../?p=film&id=<id>-<slug>`) |
+| `--alldebrid-key "<clé>"` | clé API AllDebrid pour activer zone-telechargement (mémorisée en local, **jamais commitée**) |
+| `--zone-site <URL>` | si zone-telechargement change de domaine (mémorisé) |
 | `--season <N>` | saison(s) d'une série (ex. `1`, `1-3`, `all`) |
 | `--episodes <N>` | épisode(s) (ex. `1-5`, `1,3,5`, `all`) |
 | `--dest <chemin>` | dossier de destination sans poser la question |
@@ -282,6 +289,28 @@ sudo apt install xvfb
 Profil + config sur le disque du portable → **survivent au redémarrage**, le cron repart au boot.
 
 Options utiles : `--out fichier` (écrit le jeton au lieu de l'afficher / le pousser), `--profile-dir CHEMIN`, `--no-profile`.
+
+### Deuxième site : zone-telechargement (meilleure qualité) + AllDebrid
+
+zone-telechargement est un site de **téléchargement direct** : pas de streaming, mais des fichiers de **bien meilleure qualité** (BluRay, 4K, REMUX). Ses liens pointent vers des hébergeurs (1fichier, Uptobox, Rapidgator, Turbobit…) protégés par **dl-protect**. Pour les récupérer à pleine vitesse, il faut un **débrideur** : [AllDebrid](https://alldebrid.com) (compte requis, essai ou abonnement).
+
+**Activation** (une fois, en local — la clé n'est jamais écrite dans le dépôt) :
+
+```bash
+python main.py films --alldebrid-key "VOTRE_CLÉ_ALLDEBRID"
+# → "Clé AllDebrid enregistrée ✅ (compte : <pseudo>)." confirme qu'elle est valide
+```
+
+La clé est stockée dans `config.json` (non versionné), comme le cookie Cloudflare. Trouve-la sur AllDebrid → **Mon compte → Clés API / applications**.
+
+Ensuite, une recherche interroge automatiquement **les deux sites**. Pour un film trouvé sur zone-telechargement, toutes les **versions/qualités** de la page (et sa section « Qualités également disponibles ») sont proposées, meilleure d'abord ; le programme déplie le lien dl-protect via AllDebrid, télécharge le fichier direct en multi-connexions et le range comme les autres (`<dossier>/Films/Titre (Année)/…`). L'extension réelle du fichier est conservée (souvent `.mkv` en 4K) et le faststart Plex est appliqué aux `.mp4`.
+
+Notes :
+
+- **Films seulement** côté zone-telechargement pour l'instant (les séries passent par Nakios).
+- Le **plafond `--quality`** ne s'applique pas à ces fichiers : on récupère exactement la version choisie (donc choisis la qualité dans la liste). En mode non-interactif, c'est la meilleure qui est prise.
+- Si un fichier est une **archive multi-parties** (`.rar`, `.001`…), il est récupéré tel quel : la décompression automatique n'est pas encore gérée.
+- `--zone-site <URL>` si le domaine du site change.
 
 ### Si « aucun lecteur trouvé »
 
