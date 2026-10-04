@@ -77,7 +77,11 @@ class Zone:
         return resp.text
 
     # ----------------------------------------------------------------- search
-    def search(self, query, limit=20):
+    def search(self, query, limit=20, kind=None):
+        # zone-telechargement ne propose que des films : si on cible les
+        # séries, on ne renvoie rien.
+        if kind == "tv":
+            return []
         html = self._get(f"/?p=films&search={quote_plus(query)}")
         if not html:
             return []
