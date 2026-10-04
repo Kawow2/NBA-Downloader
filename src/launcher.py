@@ -30,7 +30,7 @@ REQUIRED_MODULES = ("requests", "bs4", "tqdm", "yt_dlp", "curl_cffi", "Crypto", 
 # "films" word, or a site URL (guess_category).
 _ANIME_ONLY = ("--search", "--episodes", "--player", "--fast", "--mp4", "--tool", "--no-mal", "--latest")
 _NBA_ONLY = ("--quality", "--site", "--debug", "--default-dir", "--set-default-dir")
-_FILMS_ONLY = ("--profile-id", "--sources-path", "--season", "--cookie")
+_FILMS_ONLY = ("--profile-id", "--sources-path", "--season", "--cookie", "--kind")
 _LAUNCHER_OPTS = ("--anime-dir", "--nba-dir", "--films-dir",
                   "--set-anime-dir", "--set-nba-dir", "--set-films-dir", "--faststart")
 
@@ -252,19 +252,22 @@ class Launcher:
         w = 62
         while True:
             print(f"\n{Colors.HEADER}{Colors.BOLD}╔{'═' * w}╗\n║{'ANIME · NBA · FILMS & SÉRIES  DOWNLOADER'.center(w)}║\n╚{'═' * w}╝{Colors.ENDC}")
-            print(f"  1. 🎌 Anime           {Colors.DIM}(anime-sama, nakanime)  → {self.folder('anime')}{Colors.ENDC}")
-            print(f"  2. 🏀 NBA             {Colors.DIM}(basketball-video.com)  → {self.folder('nba')}{Colors.ENDC}")
-            print(f"  3. 🎬 Films & Séries  {Colors.DIM}(nakios.rent)           → {self.folder('films')}{Colors.ENDC}")
-            print(f"  4. ⚙️  Réglages {Colors.DIM}(dossiers, parallélisme, qualité){Colors.ENDC}")
+            print(f"  1. 🎌 Anime           {Colors.DIM}(anime-sama, nakanime)        → {self.folder('anime')}{Colors.ENDC}")
+            print(f"  2. 🏀 NBA             {Colors.DIM}(basketball-video.com)        → {self.folder('nba')}{Colors.ENDC}")
+            print(f"  3. 🎬 Films           {Colors.DIM}(nakios, zone-telechargement) → {os.path.join(self.folder('films'), 'Films')}{Colors.ENDC}")
+            print(f"  4. 📺 Séries          {Colors.DIM}(nakios.rent)                 → {os.path.join(self.folder('films'), 'Séries')}{Colors.ENDC}")
+            print(f"  5. ⚙️  Réglages {Colors.DIM}(dossiers, parallélisme, qualité){Colors.ENDC}")
             print("  q. Quitter")
             choice = _ask("Choix : ").strip().lower()
             if choice in ("1", "a", "anime"):
                 return "anime"
             if choice in ("2", "n", "nba"):
                 return "nba"
-            if choice in ("3", "f", "films"):
+            if choice in ("3", "f", "film", "films"):
                 return "films"
-            if choice == "4":
+            if choice in ("4", "s", "serie", "série", "series", "séries"):
+                return "series"
+            if choice == "5":
                 self.settings()
             elif choice in ("q", "quit", "exit"):
                 sys.exit(0)
@@ -344,8 +347,19 @@ def launch():
     elif args:
         category = guess_category(args)
     try:
-        if category is None:
+        from_menu = category is None
+        if from_menu:
             category = launcher.menu()
+        # Entrées de menu « Films » / « Séries » : même programme « films », avec
+        # un filtre de type pré-réglé (--kind). En ligne de commande, `films`
+        # reste sans filtre (les deux) sauf --kind explicite.
+        if category == "series":
+            if not any(a.partition("=")[0] == "--kind" for a in args):
+                args = args + ["--kind", "serie"]
+            category = "films"
+        elif from_menu and category == "films":
+            if not any(a.partition("=")[0] == "--kind" for a in args):
+                args = args + ["--kind", "film"]
         launcher.start(category, args)
     except KeyboardInterrupt:
         print("\nInterrompu.")

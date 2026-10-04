@@ -12,12 +12,15 @@ Chaque catégorie a **son propre dossier** (sa bibliothèque Plex), demandé la 
 ╔══════════════════════════════════════════════════════════════╗
 ║            ANIME · NBA · FILMS & SÉRIES  DOWNLOADER           ║
 ╚══════════════════════════════════════════════════════════════╝
-  1. 🎌 Anime           (anime-sama, nakanime)  → /srv/plex/Anime
-  2. 🏀 NBA             (basketball-video.com)  → /srv/plex/Sports/NBA
-  3. 🎬 Films & Séries  (nakios.rent)           → /srv/plex
-  4. ⚙️  Réglages (dossiers, parallélisme, qualité)
+  1. 🎌 Anime           (anime-sama, nakanime)        → /srv/plex/Anime
+  2. 🏀 NBA             (basketball-video.com)        → /srv/plex/Sports/NBA
+  3. 🎬 Films           (nakios, zone-telechargement) → /srv/plex/Films
+  4. 📺 Séries          (nakios.rent)                 → /srv/plex/Séries
+  5. ⚙️  Réglages (dossiers, parallélisme, qualité)
   q. Quitter
 ```
+
+**Films** et **Séries** sont deux entrées distinctes : elles lancent le même téléchargeur mais la recherche est déjà **filtrée** sur le type choisi (inutile de le repréciser). `python main.py films` (sans passer par le menu) cherche les deux à la fois ; `--kind film|serie` force un type.
 
 ## Lancement
 
@@ -164,7 +167,7 @@ Une **recherche interroge les deux sites à la fois** : chaque résultat est ét
 
 ## Déroulement
 
-1. **Menu** : `1` = rechercher. Après le titre, le programme demande si tu veux un **film**, une **série** ou **les deux** (`f` / `s` / Entrée) pour ne garder que ce type. On peut aussi coller directement une URL `nakios.rent` (`.../series/<id>`, `.../film/<id>`) ou zone-telechargement (`.../?p=film&id=<id>-<slug>`).
+1. **Menu principal** : choisis **3 = Films** ou **4 = Séries** — la recherche est alors déjà filtrée sur ce type (bandeau « Filtre : … uniquement »). Puis `1` = rechercher par titre, ou colle directement une URL `nakios.rent` (`.../series/<id>`, `.../film/<id>`) ou zone-telechargement (`.../?p=film&id=<id>-<slug>`). (`python main.py films` sans le menu cherche les deux types ; `--kind film|serie` force un type.)
 2. **Résultat** : les résultats sont **regroupés par source** (un en-tête par site, ~**10 par source**, soit jusqu'à 20 au total avec les deux), chaque ligne indiquant **Film** ou **Série** et l'année. Choisir le numéro (la numérotation est globale, 1..N).
 3. **Série** : choisir la/les **saison(s)** (ex. `1`, `1-3`, Entrée = toutes), puis les **épisodes** (ex. `1-5`, `1,3,5`, Entrée = tous).
 4. **Chemin** : Entrée = dossier Films & Séries, ou un autre chemin.

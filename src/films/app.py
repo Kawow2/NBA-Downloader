@@ -296,10 +296,14 @@ def media_from_url(url, providers):
 
 
 # ---------------------------------------------------------------- recherche
-def choose_media(providers):
+def choose_media(providers, kind=None):
+    """Boucle de recherche. `kind` ('movie'/'tv', venant du menu ou de --kind)
+    limite les résultats à ce type, sans reposer la question."""
+    what = {"movie": "un film", "tv": "une série"}.get(kind, "un film ou une série")
+    whats = {"movie": "films", "tv": "séries"}.get(kind, "films & séries")
     while True:
         print(f"{Colors.BOLD}Que voulez-vous faire ?{Colors.ENDC}")
-        print("  1. Rechercher un film ou une série")
+        print(f"  1. Rechercher {what}")
         print(f"  {Colors.DIM}(ou collez une URL d'un des sites — q pour quitter){Colors.ENDC}")
         choice = ask("Choix : ")
         if choice.lower() in ("q", "quit", "exit"):
@@ -311,12 +315,10 @@ def choose_media(providers):
             print_status("URL non reconnue.", "error")
             continue
 
-        query = choice if choice not in ("1", "") else ask("Recherche (titre du film ou de la série) : ")
+        query = choice if choice not in ("1", "") else ask(f"Recherche ({what}) : ")
         if not query:
             continue
-        kind = _parse_kind(ask("Film ou série ? (f = film, s = série, Entrée = les deux) : "))
-        what = {"movie": "films", "tv": "séries"}.get(kind, "films & séries")
-        print_status(f"Recherche de « {query} » ({what}) sur {len(providers)} site(s)...", "loading")
+        print_status(f"Recherche de « {query} » ({whats}) sur {len(providers)} site(s)...", "loading")
         results = search_all(providers, query, kind=kind)
         if not results:
             print_status("Aucun résultat.", "error")
@@ -862,8 +864,11 @@ def main():
     configure(max_height=None if quality == "best" else int(quality),
               threads=get_setting("films_threads") or 32)
 
+    kind = _parse_kind(args.kind)
     site = Site(debug=args.debug)
     banner(site)
+    if kind:
+        print(f"  {Colors.DIM}Filtre : {'films' if kind == 'movie' else 'séries'} uniquement{Colors.ENDC}")
     print(f"  {Colors.DIM}Chemin par défaut : {default_dir()}{Colors.ENDC}")
     quality_label = f"{SETTINGS['max_height']}p max" if SETTINGS["max_height"] else "la meilleure"
     print(f"  {Colors.DIM}Qualité : {quality_label} · {SETTINGS['threads']} téléchargements en parallèle{Colors.ENDC}")
@@ -906,7 +911,7 @@ def main():
                              "ou le fournisseur correspondant n'est pas actif.", "error")
                 return
         elif args.search:
-            results = search_all(providers, args.search, kind=_parse_kind(args.kind))
+            results = search_all(providers, args.search, kind=kind)
             if not results:
                 print_status("Aucun résultat.", "error")
                 return
@@ -922,7 +927,7 @@ def main():
 
         # Mode interactif
         while True:
-            media = choose_media(providers)
+            media = choose_media(providers, kind=kind)
             if media is None:
                 break
             process(media.provider, media, choose_dest(args.dest), args.season, args.episodes)
