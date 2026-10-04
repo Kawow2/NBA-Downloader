@@ -90,12 +90,21 @@ def _looks_json(ct, body):
     return "json" in (ct or "") or head in ("{", "[")
 
 
-class BrowserSession:
-    """Navigateur persistant qui franchit Cloudflare puis sert d'API."""
+# Profil navigateur persistant : une fois Cloudflare franchi, la clearance est
+# gardée dans ce profil, si bien que les captures suivantes (même headless, en
+# tâche planifiée) passent sans intervention. Hors du dépôt.
+DEFAULT_PROFILE_DIR = os.path.join(os.path.expanduser("~"), ".nakios-downloader", "chromium-profile")
 
-    def __init__(self, base, status=None):
+
+class BrowserSession:
+    """Navigateur qui franchit Cloudflare puis sert d'API. Avec un profil
+    persistant (profile_dir), la session Cloudflare est conservée entre deux
+    lancements."""
+
+    def __init__(self, base, status=None, profile_dir=None):
         self.base = base.rstrip("/")
         self._status = status
+        self.profile_dir = profile_dir  # None = session éphémère
         self._pw = None
         self._browser = None
         self._context = None
@@ -170,11 +179,8 @@ class BrowserSession:
 
     def _try_open(self, headless, timeout):
         try:
-            if not self._launch(headless):
+            if not self._make_context(headless):
                 return False
-            self._context = self._browser.new_context(
-                locale="fr-FR", timezone_id="Europe/Paris",
-                viewport={"width": 1280, "height": 800})
             self._context.add_init_script(_STEALTH_JS)
             self._page = self._context.new_page()
             self._api_ok = False
@@ -205,24 +211,37 @@ class BrowserSession:
             self._say(f"Navigateur : {str(e)[:150]}", "error")
             return False
 
-    def _launch(self, headless):
+    def _make_context(self, headless):
+        """Crée self._context (persistant si profile_dir, sinon éphémère)."""
         from playwright.sync_api import sync_playwright
         if self._pw is None:
             self._pw = sync_playwright().start()
         args = ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+        ctx_opts = {"locale": "fr-FR", "timezone_id": "Europe/Paris",
+                    "viewport": {"width": 1280, "height": 800}}
+        launch = {"headless": headless, "args": args}
         exe = os.environ.get("FILMS_CHROMIUM_PATH")
-        attempts = []
         if exe:
-            attempts.append({"headless": headless, "args": args, "executable_path": exe})
-        else:
-            # Vrai Chrome d'abord (meilleur passage Cloudflare), puis le
-            # Chromium de Playwright.
-            attempts.append({"headless": headless, "args": args, "channel": "chrome"})
-            attempts.append({"headless": headless, "args": args})
+            launch["executable_path"] = exe
+        # Profil persistant : un seul contexte, pas de navigateur séparé. C'est
+        # lui qui garde la clearance Cloudflare d'un lancement à l'autre.
+        if self.profile_dir:
+            try:
+                os.makedirs(self.profile_dir, exist_ok=True)
+                self._context = self._pw.chromium.launch_persistent_context(
+                    self.profile_dir, **launch, **ctx_opts)
+                self._browser = None
+                return True
+            except Exception as e:
+                self._say(f"Profil persistant indisponible ({str(e)[:80]}), session éphémère.", "warning")
+        # Éphémère : vrai Chrome d'abord (meilleur passage Cloudflare), puis le
+        # Chromium embarqué de Playwright.
+        attempts = [dict(launch)] if exe else [dict(launch, channel="chrome"), dict(launch)]
         last = None
         for kw in attempts:
             try:
                 self._browser = self._pw.chromium.launch(**kw)
+                self._context = self._browser.new_context(**ctx_opts)
                 return True
             except Exception as e:
                 last = e
@@ -285,14 +304,13 @@ class BrowserSession:
         return header, self.user_agent
 
     def close(self):
-        for obj, meth in ((self._browser, "close"), (self._pw, "stop")):
+        for obj, meth in ((self._context, "close"), (self._browser, "close"), (self._pw, "stop")):
             try:
                 if obj:
                     getattr(obj, meth)()
             except Exception:
                 pass
-        self._browser = None
-        self._pw = None
+        self._context = self._browser = self._pw = None
         if self._display:
             try:
                 self._display.stop()
@@ -301,10 +319,10 @@ class BrowserSession:
             self._display = None
 
 
-def grab_session(base_url, headless=True, timeout=90, status=None):
+def grab_session(base_url, headless=True, timeout=90, status=None, profile_dir=DEFAULT_PROFILE_DIR):
     """Compat : ouvre un BrowserSession, renvoie (cookie_header, user_agent)
     puis ferme. Préférer BrowserSession pour garder le navigateur ouvert."""
-    bs = BrowserSession(base_url, status=status)
+    bs = BrowserSession(base_url, status=status, profile_dir=profile_dir)
     try:
         if not bs.open(headless=headless, timeout=timeout):
             return None

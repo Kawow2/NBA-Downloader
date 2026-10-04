@@ -220,6 +220,69 @@ Si rien ne passe (API toujours franchie par le navigateur mais flux refusé), le
 
 **Repli manuel** (Playwright indisponible) : passe la session toi-même avec `--cookie "…" --user-agent "…"` (ou quand le programme le demande) — `F12 → Réseau` → une requête `/api/…` → en-tête `cookie` ; et `F12 → Console → navigator.userAgent`. Le `cf_clearance` est lié à ton IP + navigateur et expire ; c'est un secret, gardé en local, jamais commité.
 
+### Serveur Plex en SSH (sans navigateur) → jeton de session
+
+Un serveur headless (portable Linux auquel tu te connectes en SSH) n'a pas de navigateur pour franchir Cloudflare. Comme le `cf_clearance` est lié à l'**IP publique**, capture la session sur une **machine du même réseau qui a un navigateur** (ton PC fixe) et transfère-la :
+
+1. **Sur le PC fixe** (même réseau que le serveur) :
+   ```
+   python main.py films --export-session          # (ou --export-session --browser-visible)
+   ```
+   Un navigateur s'ouvre, franchit Cloudflare, et le programme imprime une commande `--import-session <jeton>` (le jeton contient cookie, User-Agent, base d'API, profil).
+2. **Sur le serveur** (SSH), colle la commande affichée :
+   ```
+   python main.py films --import-session <jeton>
+   ```
+   Le serveur mémorise la session et vérifie que l'API répond. Ensuite, télécharge normalement — ajoute `--no-browser` pour qu'il n'essaie jamais d'ouvrir un navigateur :
+   ```
+   ./start.sh films --no-browser
+   ```
+
+Le cookie expire au bout de quelques jours (ou si ton IP publique change) : refais l'étape 1 + 2 avec un jeton frais. Le jeton est un secret (il contient ta session) — transfère-le par ton SSH, ne le partage pas.
+
+> Alternative sans jeton : `ssh -X` avec un serveur X sur le PC fixe (VcXsrv sous Windows, XQuartz sous macOS) affiche le navigateur de `--browser-visible` sur ton écran à travers le SSH.
+
+#### Recommandé : télécharger le soir depuis le PC fixe (éteint la journée)
+
+Workflow typique : le **portable** (serveur Plex) reste allumé, mais tu ne télécharges que le **soir**, en SSH depuis ton **PC fixe** (éteint la journée, rallumé le soir). Comme le PC fixe a un écran, c'est lui qui capture la session (Cloudflare se résout tout seul une fois le profil amorcé) et la **pousse** au portable ; le portable n'a besoin d'**aucun navigateur**.
+
+**Prérequis (une fois) :** une **clé SSH** du PC fixe vers le portable (`ssh-keygen` puis `ssh-copy-id user@portable`, ou l'équivalent Windows), pour que le `--push` soit non interactif.
+
+**Amorçage (une seule fois), sur le PC fixe :**
+```powershell
+.\start.ps1 films --export-session --browser-visible --push user@portable
+```
+→ une fenêtre s'ouvre sur ton écran, tu passes Cloudflare (+ une recherche) ; la session est capturée et poussée sur le portable. Le profil du PC fixe est désormais amorcé.
+
+**Chaque soir**, deux commandes sur le PC fixe (allumé) :
+```powershell
+.\start.ps1 films --export-session --push user@portable   # session fraîche -> portable (sans fenêtre, grâce au profil)
+ssh user@portable "cd ~/code/NBA-Downloader && ./start.sh films --no-browser"   # recherche & télécharge
+```
+
+**Pour l'oublier :** fais la 1re commande **automatiquement au démarrage du PC fixe** (ainsi, quand tu le rallumes le soir, le portable a déjà une session fraîche) :
+```
+schtasks /create /tn "nakios-session" /sc ONLOGON ^
+  /tr "C:\code\NBA-Downloader\.venv\Scripts\python.exe C:\code\NBA-Downloader\main.py films --export-session --push user@portable"
+```
+
+PC fixe éteint la journée = aucun souci (tu ne télécharges pas à ce moment-là). S'il se rallume et que Cloudflare redemande une vérification, la fenêtre réapparaît (tu as un écran) : tu cliques, c'est reparti. Le cookie est lié à ton **IP publique** : PC fixe et portable doivent être sur le **même réseau**.
+
+#### Alternative : serveur 100 % autonome (téléchargements planifiés 24/7)
+
+Si tu veux que le **portable télécharge seul** (sans PC fixe du tout, p. ex. à heure fixe), c'est lui qui porte le navigateur, en headless + écran virtuel, avec un profil amorcé une fois :
+```bash
+# sur le portable, une fois :
+sudo apt install xvfb
+.venv/bin/python -m pip install playwright pyvirtualdisplay && .venv/bin/python -m playwright install chromium
+# amorçage une fois (voir le navigateur) : ssh -X user@portable puis ./start.sh films --browser-visible
+# entretien (cron) :
+0 */6 * * * cd ~/code/NBA-Downloader && ./start.sh films --refresh-session >> ~/nakios-refresh.log 2>&1
+```
+Profil + config sur le disque du portable → **survivent au redémarrage**, le cron repart au boot.
+
+Options utiles : `--out fichier` (écrit le jeton au lieu de l'afficher / le pousser), `--profile-dir CHEMIN`, `--no-profile`.
+
 ### Si « aucun lecteur trouvé »
 
 La **recherche**, les **détails** et la **liste des saisons/épisodes** suivent l'API TMDB (trouvées automatiquement). En revanche, l'endpoint qui renvoie les **lecteurs vidéo** est propre au site : plusieurs chemins courants sont essayés, mais s'ils échouent, indiquez le bon :
