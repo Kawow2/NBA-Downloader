@@ -53,7 +53,7 @@ env/
 # videos file
 videos/
 
-# Local runtime config (Cloudflare cookie, TVDB API key, save-path/
+# Local runtime config (Cloudflare cookie, TVDB & AllDebrid API keys, save-path/
 # identification settings) - personal, contains secrets, never commit.
 src/utils/config/config.json
 # Python virtual environment (created by start.ps1)
