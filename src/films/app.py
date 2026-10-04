@@ -499,7 +499,7 @@ def import_session(token):
                      "sur le MÊME réseau (même IP publique), et réexporte un jeton frais si besoin.", "warning")
 
 
-def deliver_session_token(token, out=None, push=None, push_dir="~/NBA-Downloader"):
+def deliver_session_token(token, out=None, push=None, push_dir="~/code/NBA-Downloader"):
     """Livre le jeton : écrit dans un fichier (--out), pousse sur le serveur en
     SSH (--push), ou l'affiche pour copier-coller."""
     if out:
@@ -560,8 +560,8 @@ def main():
                         help="(serveur SSH SANS navigateur) importe le jeton généré par --export-session")
     parser.add_argument("--push", metavar="SSH",
                         help="(avec --export-session) importe le jeton sur le serveur via ssh, ex. user@serveur")
-    parser.add_argument("--push-dir", metavar="DIR", default="~/NBA-Downloader",
-                        help="dossier du projet sur le serveur distant (défaut ~/NBA-Downloader)")
+    parser.add_argument("--push-dir", metavar="DIR", default="~/code/NBA-Downloader",
+                        help="dossier du projet sur le serveur distant (défaut ~/code/NBA-Downloader)")
     parser.add_argument("--out", metavar="FICHIER",
                         help="(avec --export-session) écrit le jeton dans ce fichier au lieu de l'afficher")
     parser.add_argument("--profile-dir", metavar="DIR",

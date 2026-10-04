@@ -257,7 +257,7 @@ Workflow typique : le **portable** (serveur Plex) reste allumé, mais tu ne tél
 **Chaque soir**, deux commandes sur le PC fixe (allumé) :
 ```powershell
 .\start.ps1 films --export-session --push user@portable   # session fraîche -> portable (sans fenêtre, grâce au profil)
-ssh user@portable "cd ~/NBA-Downloader && ./start.sh films --no-browser"   # recherche & télécharge
+ssh user@portable "cd ~/code/NBA-Downloader && ./start.sh films --no-browser"   # recherche & télécharge
 ```
 
 **Pour l'oublier :** fais la 1re commande **automatiquement au démarrage du PC fixe** (ainsi, quand tu le rallumes le soir, le portable a déjà une session fraîche) :
@@ -277,7 +277,7 @@ sudo apt install xvfb
 .venv/bin/python -m pip install playwright pyvirtualdisplay && .venv/bin/python -m playwright install chromium
 # amorçage une fois (voir le navigateur) : ssh -X user@portable puis ./start.sh films --browser-visible
 # entretien (cron) :
-0 */6 * * * cd ~/NBA-Downloader && ./start.sh films --refresh-session >> ~/nakios-refresh.log 2>&1
+0 */6 * * * cd ~/code/NBA-Downloader && ./start.sh films --refresh-session >> ~/nakios-refresh.log 2>&1
 ```
 Profil + config sur le disque du portable → **survivent au redémarrage**, le cron repart au boot.
 
