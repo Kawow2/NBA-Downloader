@@ -511,7 +511,10 @@ def deliver_session_token(token, out=None, push=None, push_dir="~/NBA-Downloader
             print_status(f"Écriture impossible ({e}).", "error")
     if push:
         import subprocess
-        remote = f"cd {push_dir} && ./start.sh films --import-session {token}"
+        # ~ doit rester non quoté pour s'étendre côté serveur ; un chemin absolu
+        # est quoté pour gérer les espaces.
+        cd = f"cd {push_dir}" if push_dir.startswith("~") else f'cd "{push_dir}"'
+        remote = f"{cd} && ./start.sh films --import-session {token}"
         print_status(f"Import de la session sur {push} via SSH…", "loading")
         try:
             rc = subprocess.call(["ssh", push, remote])
