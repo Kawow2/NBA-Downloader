@@ -3,11 +3,16 @@
 # environment (.venv), created on first run.
 #
 #   ./start.sh                  menu: Anime, NBA or Films & Séries
-#   ./start.sh --tmux           same, inside a tmux session (over SSH: the
-#                               downloads keep going if the connection drops;
-#                               come back with ./start.sh --tmux again)
+#                               (over SSH: runs inside tmux automatically, so
+#                               the downloads survive a dropped connection or
+#                               the client PC being switched off — reattach
+#                               later with ./start.sh again)
+#   ./start.sh --tmux           force the tmux session (also works locally)
+#   ./start.sh --no-tmux        force a plain run, even over SSH
 #   ./start.sh nba --url "https://basketball-video.com/..."
 #   ./start.sh films --url "https://nakios.rent/series/87108"
+#
+# Push notification when the program finishes: set NTFY_TOPIC below.
 #
 # Manual equivalent:
 #   python3 -m venv .venv && . .venv/bin/activate
@@ -22,22 +27,55 @@ CHEMIN_ANIME=""
 CHEMIN_NBA=""
 CHEMIN_FILMS=""
 
+# Push notification via ntfy when the program finishes (optional).
+#   1. Install the "ntfy" app on your phone (iOS/Android), or open ntfy.sh.
+#   2. Pick a long, HARD-TO-GUESS topic name — it works like a password:
+#      anyone who knows it can read (and send) your notifications.
+#   3. Subscribe to that topic in the app, then write it below (or export
+#      NTFY_TOPIC before launching). Leave empty to disable notifications.
+NTFY_TOPIC="${NTFY_TOPIC:-}"
+NTFY_SERVER="${NTFY_SERVER:-https://ntfy.sh}"
+
+# Send a "download finished" push via ntfy. No-op if NTFY_TOPIC is empty or
+# curl is missing; never fails the run.
+notify_done() {
+    local status="${1:-0}" body tags prio
+    [ -n "$NTFY_TOPIC" ] || return 0
+    command -v curl >/dev/null 2>&1 || return 0
+    if [ "$status" -eq 0 ]; then
+        body="Téléchargement terminé ✅ (sur $(hostname 2>/dev/null))"
+        tags="white_check_mark"; prio="default"
+    else
+        body="Arrêté avec le code $status ⚠️ (sur $(hostname 2>/dev/null))"
+        tags="warning"; prio="high"
+    fi
+    curl -fsS --max-time 15 \
+        -H "Title: NBA Downloader" -H "Tags: $tags" -H "Priority: $prio" \
+        -d "$body" "$NTFY_SERVER/$NTFY_TOPIC" >/dev/null 2>&1 || true
+}
+
 cd "$(dirname "$0")" || exit 1
 
+# Over SSH, run inside a persistent tmux session by default so downloads keep
+# going if the connection drops (or the client PC is switched off). --tmux
+# forces it everywhere; --no-tmux opts out.
+want_tmux=""
 if [ "$1" = "--tmux" ]; then
+    shift; want_tmux=1
+elif [ "$1" = "--no-tmux" ]; then
     shift
-    if [ -z "$TMUX" ]; then
-        if command -v tmux >/dev/null 2>&1; then
-            # -A: reattach to the running session if there is one.
-            # START_SH_IN_TMUX: pause at the end, or tmux would close the
-            # window (and any error message) as soon as the program stops.
-            exec tmux new-session -A -s downloader "START_SH_IN_TMUX=1 $(printf '%q ' "$PWD/start.sh" "$@")"
-        fi
-        echo "tmux n'est pas installé (ex. sudo apt install tmux) : lancement sans tmux."
+elif [ -n "$SSH_CONNECTION" ] && [ -z "$STY" ]; then
+    want_tmux=1
+fi
+
+if [ -n "$want_tmux" ] && [ -z "$TMUX" ] && [ -z "$STY" ]; then
+    if command -v tmux >/dev/null 2>&1; then
+        # -A: reattach to the running session if there is one.
+        # START_SH_IN_TMUX: pause at the end, or tmux would close the
+        # window (and any error message) as soon as the program stops.
+        exec tmux new-session -A -s downloader "START_SH_IN_TMUX=1 $(printf '%q ' "$PWD/start.sh" "$@")"
     fi
-elif [ -n "$SSH_CONNECTION" ] && [ -z "$TMUX" ] && [ -z "$STY" ]; then
-    echo "Astuce SSH : ./start.sh --tmux garde les téléchargements actifs si la connexion coupe"
-    echo "            (se détacher : Ctrl+B puis D ; revenir : ./start.sh --tmux)."
+    echo "tmux n'est pas installé (ex. sudo apt install tmux) : lancement sans tmux." >&2
 fi
 
 VENV_PY=".venv/bin/python"
@@ -78,8 +116,17 @@ ARGS=()
 [ -n "$CHEMIN_FILMS" ] && ARGS+=(--films-dir "$CHEMIN_FILMS")
 if [ -n "$START_SH_IN_TMUX" ]; then
     "$VENV_PY" main.py "${ARGS[@]}" "$@"
+    status=$?
+    notify_done "$status"
     echo
     read -rp "Programme terminé. Entrée pour fermer la session tmux... " _
-    exit 0
+    exit "$status"
+fi
+
+if [ -n "$NTFY_TOPIC" ]; then
+    "$VENV_PY" main.py "${ARGS[@]}" "$@"
+    status=$?
+    notify_done "$status"
+    exit "$status"
 fi
 exec "$VENV_PY" main.py "${ARGS[@]}" "$@"
