@@ -8,6 +8,7 @@ Started from main.py's Anime/NBA menu (src/launcher.py), or directly:
 """
 import argparse
 import os
+from itertools import islice
 import re
 import sys
 
@@ -15,15 +16,23 @@ from src.var import Colors, print_status, print_separator
 from src.utils.config.config import get_setting, set_setting
 from src.utils.check.check_ffmpeg_installed import check_ffmpeg_installed
 from src.utils.check.check_folder import folder_problem
-from src.nba.site import Site, parse_date
+from src.nba.site import Site, parse_date, game_matches
 from src.nba.plex import plex_target
 from src.nba.thumbnail import add_game_thumbnails, thumb_path
 from src.nba.downloader import (download_part, merge_parts, ffmpeg_hint, ffmpeg_install_command, configure,
-                                SETTINGS, temp_files)
+                                SETTINGS, temp_files, estimate_size)
 from src.utils.mp4_faststart import ensure_faststart
 from src.utils.ffmpeg_progress import media_duration
 
 FALLBACK_DEFAULT_DIR = os.path.join(os.path.expanduser("~"), "Videos", "NBA")
+
+# Automatic mode: the latest games are checked BATCH at a time for the
+# team, at most MAX_SCANNED of them; and a "game" under MIN_GAME_SIZE is
+# not downloaded - a full game is several GB, anything smaller is a
+# highlights clip, a recap or a broken upload.
+BATCH = 10
+MAX_SCANNED = 300
+MIN_GAME_SIZE = 1024 ** 3
 
 
 def banner(site):
@@ -63,17 +72,47 @@ def print_games(games):
 
 
 def find_latest_game(site, query):
-    """Newest match matching `query` (search already sorts newest first),
-    or None. Shared by the automatic menu option and `--search --auto`."""
-    print_status(f"Recherche du dernier match de « {query} »...", "loading")
-    games = site.search(query, 10)
-    if not games:
-        print_status("Aucun match trouvé.", "error")
-        return None
-    game = games[0]
-    when = f" ({game.date.strftime('%d/%m/%Y')})" if game.date else ""
-    print_status(f"Dernier match : {game.title}{when}", "success")
-    return game
+    """Latest game of a team: the site's 10 latest games are checked, then
+    the next 10, and so on; the first batch that has the team gives its
+    most recent game. None if the team isn't in the MAX_SCANNED latest
+    games. Shared by the automatic menu option and --search."""
+    print_status(f"Recherche du dernier match de « {query} » dans les derniers matchs du site...", "loading")
+    games = site.iter_latest_games()
+    scanned = 0
+    while scanned < MAX_SCANNED:
+        batch = list(islice(games, BATCH))
+        if not batch:
+            break
+        first, scanned = scanned + 1, scanned + len(batch)
+        hits = [g for g in batch if game_matches(g, query)]
+        if hits:
+            game = site._sort_newest_first(hits)[0]
+            when = f" ({game.date.strftime('%d/%m/%Y')})" if game.date else ""
+            print_status(f"Dernier match : {game.title}{when} (matchs {first}-{scanned} du site)", "success")
+            return game
+        print_status(f"Matchs {first}-{scanned} : pas de « {query} ».", "info")
+    print_status(f"Aucun match de « {query} » dans les {scanned} derniers matchs du site.", "error")
+    return None
+
+
+def _size_label(size):
+    return f"{size / 1024 ** 3:.1f} Go".replace(".", ",") if size >= 1024 ** 3 else f"{size / 1024 ** 2:.0f} Mo"
+
+
+def estimate_game_size(server, idxs, game):
+    """Announced size of the whole game on one server (all its parts),
+    before downloading; None when a part's size can't be known up front.
+    Stops as soon as the parts seen already reach MIN_GAME_SIZE."""
+    total = 0
+    for idx in idxs:
+        part = server.parts[idx]
+        size = estimate_size(part.url, page_url=part.referer or game.url)
+        if size is None:
+            return None
+        total += size
+        if total >= MIN_GAME_SIZE:
+            break
+    return total
 
 
 def choose_game(site):
@@ -291,12 +330,41 @@ def process_game(site, url, cli_dest, listed=None, auto=False):
     if len(picked) == len(server.parts):
         attempts += [(s, list(range(len(s.parts)))) for s in servers if s is not server and s.parts]
     done, failed = [], 0
+    too_small = 0  # servers set aside in automatic mode: under MIN_GAME_SIZE
+    previous_too_small = False
     for k, (srv, idxs) in enumerate(attempts):
         if k:
             print_separator(title=f"SERVEUR SUIVANT : {srv.name}")
-            print_status(f"Le match est repris en entier depuis « {srv.name} » ({len(srv.parts)} partie(s)) : "
-                         "les parties de serveurs différents ne se correspondent pas.", "warning")
+            if not previous_too_small:
+                print_status(f"Le match est repris en entier depuis « {srv.name} » ({len(srv.parts)} partie(s)) : "
+                             "les parties de serveurs différents ne se correspondent pas.", "warning")
+        previous_too_small = False
+        if auto:
+            # Size announced by the server first, so a recap isn't even
+            # downloaded; when it can't be known, the downloaded file is
+            # checked below instead.
+            print_status(f"Vérification de la taille du match sur « {srv.name} »...", "loading")
+            size = estimate_game_size(srv, idxs, game)
+            if size is not None and size < MIN_GAME_SIZE:
+                print_status(f"« {srv.name} » : {_size_label(size)} seulement, moins de 1 Go : sûrement pas le match "
+                             "complet (résumé, extraits ?). Pas téléchargé.", "warning")
+                done, failed, too_small = [], len(idxs), too_small + 1
+                previous_too_small = True
+                continue
         done, failed = download_server(srv, idxs, game, folder, stem, final_path, can_merge)
+        if auto and not failed:
+            total = sum(os.path.getsize(p) for p in done if os.path.exists(p))
+            if total < MIN_GAME_SIZE:
+                print_status(f"Fichier de {_size_label(total)} seulement, moins de 1 Go : sûrement pas le match "
+                             "complet (résumé, extraits ?). Supprimé.", "warning")
+                for p in done:
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+                done, failed, too_small = [], len(idxs), too_small + 1
+                previous_too_small = True
+                continue
         if not failed:
             break
         if k + 1 < len(attempts):
@@ -309,10 +377,15 @@ def process_game(site, url, cli_dest, listed=None, auto=False):
     print_separator(title="RÉSUMÉ")
     for p in done:
         print(f"  {Colors.OKGREEN}✔{Colors.ENDC} {p}")
-    if failed:
+    if failed and too_small == len(attempts):
+        print(f"  {Colors.FAIL}✘ Aucun serveur ne propose ce match en plus de 1 Go : rien n'a été téléchargé "
+              f"(résumé ou extraits plutôt que le match ?).{Colors.ENDC}")
+    elif failed:
         print(f"  {Colors.FAIL}✘ {failed} partie(s) en échec{Colors.ENDC}")
+        if too_small:
+            print_status(f"{too_small} serveur(s) écarté(s) : moins de 1 Go.", "info")
         print_status("Relancez le même match plus tard : les parties déjà téléchargées sont gardées.", "info")
-    clean_temp_files(folder, stem, keep_own=bool(failed))
+    clean_temp_files(folder, stem, keep_own=bool(failed), ask=not auto)
 
 
 def _hours(seconds):
@@ -391,10 +464,11 @@ def remove_other_server_parts(folder, stem, keep):
                 pass
 
 
-def clean_temp_files(folder, stem, keep_own=False):
+def clean_temp_files(folder, stem, keep_own=False, ask=True):
     """Delete the game's .part/.ytdl leftovers once it is complete (they
     are kept while it isn't: they let the next run resume), then offer to
-    delete leftovers of older, interrupted downloads in the same folder."""
+    delete leftovers of older, interrupted downloads in the same folder
+    (ask=False, automatic mode: only say they're there, keep them)."""
     if not os.path.isdir(folder):
         return
     if not keep_own:
@@ -409,6 +483,9 @@ def clean_temp_files(folder, stem, keep_own=False):
     size = sum(os.path.getsize(p) for p in others if os.path.exists(p)) / 1024 ** 3
     print_status(f"{len(others)} fichier(s) temporaire(s) d'anciens téléchargements interrompus ({size:.1f} Go) "
                  f"dans {folder}.", "info")
+    if not ask:
+        print_status("Gardés (mode automatique) : relancez sans --auto pour choisir de les supprimer.", "info")
+        return
     if yes("Les supprimer ? (on ne pourra plus reprendre ces téléchargements)", default=True):
         removed = 0
         for p in others:
@@ -425,9 +502,10 @@ def main():
     parser = argparse.ArgumentParser(prog="main.py nba",
                                      description="Télécharge des matchs NBA depuis basketball-video.com en .mp4 pour Plex.")
     parser.add_argument("--url", help="URL de la page d'un match")
-    parser.add_argument("--search", metavar="ÉQUIPE", help="Recherche une équipe / un match (ex : \"Knicks\")")
+    parser.add_argument("--search", metavar="ÉQUIPE",
+                        help="Dernier match d'une équipe (ex : \"Knicks\"), cherché 10 par 10 dans les derniers matchs du site")
     parser.add_argument("--auto", action="store_true",
-                        help="Sans rien demander : télécharge le dernier match trouvé (1er serveur, toutes les parties). "
+                        help="Sans rien demander : 1er serveur, toutes les parties, et rien sous 1 Go (un résumé). "
                              "Avec --search (une équipe) ou --url")
     parser.add_argument("--dest", help="Dossier de destination (sinon le chemin par défaut)")
     parser.add_argument("--default-dir", metavar="CHEMIN", help="Chemin proposé par défaut pour cette session (le dossier NBA du menu)")

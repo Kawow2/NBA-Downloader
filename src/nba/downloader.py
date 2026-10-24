@@ -16,7 +16,7 @@ import shutil
 import socket
 import subprocess
 import sys
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from src.var import Colors, DEFAULT_USER_AGENT, print_status
 from src.utils.check.check_ffmpeg_installed import check_ffmpeg_installed
@@ -450,6 +450,108 @@ def _download_builtin(embed_url, out_path, page_url):
         print_status(f"ffmpeg permettrait un autre essai : {ffmpeg_install_command()}", "warning")
         return False
     return ffmpeg_copy(stream, out_path, referer=referer)
+
+
+# ------------------------------------------------------------ size check
+class _SilentLogger:
+    """yt-dlp logger for the size check: a failed check is not an error
+    (the download itself may still work another way)."""
+    def debug(self, msg):
+        pass
+
+    info = warning = error = debug
+
+
+def _m3u8_size(url, headers, tbr=None):
+    """Rough size of an HLS stream: the variant's bit rate (the one under
+    the quality cap, as yt-dlp picks it) x the playlist's duration. None
+    when the playlists can't tell."""
+    import requests
+    try:
+        text = requests.get(url, headers=headers, timeout=20).text
+    except requests.RequestException:
+        return None
+    bandwidth = tbr * 1000 if tbr else None
+    if "#EXT-X-STREAM-INF" in text:
+        lines = text.splitlines()
+        variants = []
+        for i, line in enumerate(lines):
+            if not line.startswith("#EXT-X-STREAM-INF"):
+                continue
+            rate = re.search(r"AVERAGE-BANDWIDTH=(\d+)", line) or re.search(r"[:,]BANDWIDTH=(\d+)", line)
+            height = re.search(r"RESOLUTION=\d+x(\d+)", line)
+            uri = next((u.strip() for u in lines[i + 1:] if u.strip() and not u.startswith("#")), None)
+            if rate and uri:
+                variants.append((int(height.group(1)) if height else 0, int(rate.group(1)), urljoin(url, uri)))
+        if not variants:
+            return None
+        cap = SETTINGS["max_height"]
+        _, bandwidth, media_url = max([v for v in variants if not cap or not v[0] or v[0] <= cap] or variants)
+        try:
+            text = requests.get(media_url, headers=headers, timeout=20).text
+        except requests.RequestException:
+            return None
+    ranges = re.findall(r"#EXT-X-BYTERANGE:\s*(\d+)", text)
+    if ranges:
+        return sum(int(r) for r in ranges)
+    duration = sum(float(d) for d in re.findall(r"#EXTINF:\s*([\d.]+)", text))
+    if not duration or not bandwidth:
+        return None
+    return int(bandwidth / 8 * duration)
+
+
+def _ytdlp_size(embed_url, page_url):
+    try:
+        import yt_dlp
+    except ImportError:
+        return None
+    patch_ytdlp()
+    opts = {
+        # Same format choice as _download_with_ytdlp, so the size is that
+        # of what would really be downloaded.
+        "format": "bv*+ba/b" if check_ffmpeg_installed() else "b[ext=mp4]/b",
+        "format_sort": [f"res:{SETTINGS['max_height']}"] if SETTINGS["max_height"] else [],
+        "http_headers": {"Referer": page_url or embed_url, "User-Agent": DEFAULT_USER_AGENT},
+        "noplaylist": True, "socket_timeout": 30, "quiet": True, "no_warnings": True,
+        "logger": _SilentLogger(),
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(embed_url, download=False)
+    total = 0
+    for f in (info or {}).get("requested_formats") or [info or {}]:
+        size = f.get("filesize") or f.get("filesize_approx")
+        protocol, url = str(f.get("protocol") or ""), f.get("url")
+        if not size and url and protocol in ("http", "https"):
+            size = fast_http.remote_size(url, dict(f.get("http_headers") or {}))
+        elif not size and url and protocol.startswith("m3u8"):
+            size = _m3u8_size(url, dict(f.get("http_headers") or {}), tbr=f.get("tbr"))
+        if not size:
+            return None
+        total += size
+    return total
+
+
+def estimate_size(embed_url, page_url=None):
+    """Best-effort size in bytes of what download_part(embed_url) would
+    fetch, without downloading it. None when it can't be known up front
+    (the caller then checks the downloaded file instead)."""
+    host = (urlparse(embed_url).hostname or "").lower()
+    path = urlparse(embed_url).path.lower()
+    headers = {"User-Agent": DEFAULT_USER_AGENT}
+    if page_url:
+        headers.update({"Referer": page_url, "Origin": _origin(page_url)})
+    try:
+        if path.endswith(".mp4"):
+            return fast_http.remote_size(embed_url, headers)
+        if path.endswith(".m3u8"):
+            return _m3u8_size(embed_url, headers)
+        if any(h in host for h in EXTRACTOR_HOSTS):
+            # The project's extractors resolve short-lived links at download
+            # time: not run twice just for a size.
+            return None
+        return _ytdlp_size(embed_url, page_url)
+    except Exception:
+        return None
 
 
 def download_part(embed_url, out_path, page_url=None):

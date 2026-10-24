@@ -213,6 +213,9 @@ Sans image fournie, Plex fabrique la miniature d'un épisode à partir d'une ima
 
 Pour télécharger le **dernier match** d'une équipe sans répondre à aucune question : le programme cherche l'équipe, prend le match le plus récent, choisit le **premier serveur** et **toutes les parties**, et enregistre dans le dossier NBA.
 
+1. **Recherche** : il regarde les **10 derniers matchs** du site ; si l'équipe y est, il prend son match le plus récent. Sinon, il regarde les **10 suivants**, et ainsi de suite (jusqu'aux 300 derniers matchs).
+2. **Taille** : un match complet pèse plusieurs Go. **Moins de 1 Go** (toutes parties comprises), c'est un résumé, des extraits ou un fichier cassé : **pas téléchargé**. La taille annoncée par le serveur est vérifiée avant de télécharger ; quand le serveur ne l'annonce pas (VOE, Filemoon…), c'est le fichier téléchargé qui est vérifié, puis supprimé s'il est trop petit. Le serveur suivant est alors essayé ; si aucun ne propose plus de 1 Go, rien n'est gardé.
+
 - Dans le menu : option **`3`**, puis le nom de l'équipe (ex. `Knicks`).
 - En ligne de commande : `python main.py nba --search "Knicks" --auto`
 
@@ -221,14 +224,14 @@ python main.py nba --search "Lakers" --auto        # dernier match des Lakers, a
 python main.py nba --url "https://basketball-video.com/..." --auto   # ce match, automatique
 ```
 
-Sans `--auto`, `--search` affiche le match trouvé puis pose les questions habituelles (serveur, parties, chemin). En automatique, si le premier serveur échoue, le match est quand même repris en entier depuis le serveur suivant (comme d'habitude).
+Sans `--auto`, `--search` trouve le match de la même façon puis pose les questions habituelles (serveur, parties, chemin), sans la règle des 1 Go. En automatique, si le premier serveur échoue, le match est quand même repris en entier depuis le serveur suivant (comme d'habitude), et les fichiers temporaires d'anciens téléchargements sont gardés au lieu de demander s'il faut les supprimer.
 
 ## Options (`python main.py nba ...`)
 
 | Option | Rôle |
 | --- | --- |
-| `--search <ÉQUIPE>` | cherche une équipe / un match (ex. `"Knicks"`) et prend le plus récent |
-| `--auto` | ne rien demander : dernier match trouvé, 1er serveur, toutes les parties (avec `--search` ou `--url`) |
+| `--search <ÉQUIPE>` | dernier match d'une équipe (ex. `"Knicks"`) : les derniers matchs du site sont parcourus 10 par 10 |
+| `--auto` | ne rien demander : 1er serveur, toutes les parties, et pas de téléchargement sous 1 Go (avec `--search` ou `--url`) |
 | `--url <URL>` | télécharger directement ce match |
 | `--dest <chemin>` | dossier de destination sans poser la question |
 | `--site <URL>` | si le site change de domaine (mémorisé) |
