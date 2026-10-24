@@ -488,8 +488,9 @@ def download_part(embed_url, out_path, page_url=None):
 
 # Leftovers of a download: our own "<file>.mp4.part" and concat lists,
 # yt-dlp's ".part", ".part-FragN", ".ytdl" and its "<name>.ytdlp.*"
-# intermediate files (renamed to the final name once complete).
-_TEMP_FILE = re.compile(r"(\.part(-Frag\d+(\.part)?)?|\.ytdl|\.mp4\.txt)$|\.ytdlp\.", re.IGNORECASE)
+# intermediate files (renamed to the final name once complete), and a
+# thumbnail interrupted while being written (thumbnail.py).
+_TEMP_FILE = re.compile(r"(\.part(-Frag\d+(\.part)?)?|\.ytdl|\.mp4\.txt|\.thumb-tmp\.jpg)$|\.ytdlp\.", re.IGNORECASE)
 
 
 def temp_files(folder, stem=None):

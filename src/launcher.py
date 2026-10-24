@@ -27,7 +27,7 @@ _ANIME_ONLY = ("--search", "--episodes", "--player", "--fast", "--mp4", "--tool"
 _NBA_ONLY = ("--site", "--debug", "--set-default-dir", "--auto")
 _MEDIA_ONLY = ("--source", "--all", "--list-sources")
 _LAUNCHER_OPTS = ("--anime-dir", "--nba-dir", "--media-dir",
-                  "--set-anime-dir", "--set-nba-dir", "--set-media-dir", "--faststart")
+                  "--set-anime-dir", "--set-nba-dir", "--set-media-dir", "--faststart", "--thumbnails")
 
 # Per-category labels/examples used by the folder prompts.
 _CAT_LABEL = {"anime": "des animes", "nba": "de la NBA", "media": "des films et séries"}
@@ -43,6 +43,7 @@ USAGE = """Utilisation :
   python main.py --set-nba-dir DOSSIER     dossier par défaut de la NBA
   python main.py --set-media-dir DOSSIER   dossier par défaut des films & séries
   python main.py --faststart DOSSIER       optimise/répare les .mp4 déjà téléchargés (lecture immédiate dans Plex, son)
+  python main.py --thumbnails DOSSIER      miniatures Plex sans spoiler pour les matchs NBA déjà téléchargés
   --anime-dir / --nba-dir / --media-dir DOSSIER   dossier pour ce lancement seulement"""
 
 
@@ -176,6 +177,7 @@ class Launcher:
             print(f"  9. Films & Séries : qualité max préférée                 : "
                   f"{'la meilleure' if media_quality == 'best' else media_quality + 'p'}")
             print(" 10. Optimiser/réparer les .mp4 déjà téléchargés (lecture immédiate dans Plex, son cassé)")
+            print(" 11. NBA : miniatures sans spoiler pour les matchs déjà téléchargés")
             print("  0. Retour")
             choice = _ask("Choix : ").strip()
             if choice in ("", "0", "q"):
@@ -201,6 +203,9 @@ class Launcher:
                 for category in ("anime", "nba", "media"):
                     if os.path.isdir(self.folder(category)):
                         fix_folder(self.folder(category))
+            elif choice == "11":
+                from src.nba.thumbnail import fix_folder as add_thumbnails
+                add_thumbnails(self.folder("nba"))
             elif choice in ("7", "9"):
                 key = "nba_quality" if choice == "7" else "media_quality"
                 default = "1080" if choice == "7" else "best"
@@ -297,6 +302,10 @@ def launch():
     if "--faststart" in overrides:
         from src.utils.mp4_faststart import fix_folder
         fix_folder(os.path.expanduser(overrides["--faststart"]))
+        sys.exit(0)
+    if "--thumbnails" in overrides:
+        from src.nba.thumbnail import fix_folder as add_thumbnails
+        add_thumbnails(os.path.expanduser(overrides["--thumbnails"]))
         sys.exit(0)
 
     category = None

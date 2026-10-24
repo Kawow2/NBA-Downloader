@@ -17,6 +17,7 @@ from src.utils.check.check_ffmpeg_installed import check_ffmpeg_installed
 from src.utils.check.check_folder import folder_problem
 from src.nba.site import Site, parse_date
 from src.nba.plex import plex_target
+from src.nba.thumbnail import add_game_thumbnails, thumb_path
 from src.nba.downloader import (download_part, merge_parts, ffmpeg_hint, ffmpeg_install_command, configure,
                                 SETTINGS, temp_files)
 from src.utils.mp4_faststart import ensure_faststart
@@ -274,6 +275,7 @@ def process_game(site, url, cli_dest, listed=None, auto=False):
     print_status(f"Fichier : {final_path}", "info")
     if os.path.exists(final_path):
         print_status(f"Déjà présent : {final_path}", "success")
+        add_game_thumbnails([final_path])  # games downloaded before thumbnails existed
         return
     can_merge = check_ffmpeg_installed()
     if len(picked) > 1 and not can_merge:
@@ -302,6 +304,7 @@ def process_game(site, url, cli_dest, listed=None, auto=False):
 
     if not failed:
         remove_other_server_parts(folder, stem, keep=done)
+        add_game_thumbnails(done)
 
     print_separator(title="RÉSUMÉ")
     for p in done:
@@ -360,10 +363,11 @@ def download_server(server, idxs, game, folder, stem, final_path, can_merge):
                          "pour un match (parties en double sur ce serveur ?).", "warning")
         if merge_parts(done, final_path):
             for p in done:
-                try:
-                    os.remove(p)
-                except OSError:
-                    pass
+                for leftover in (p, thumb_path(p)):  # a part's image from an earlier run
+                    try:
+                        os.remove(leftover)
+                    except OSError:
+                        pass
             print_status(f"Match complet : {final_path} ({_hours(total)})", "success")
             return [final_path], 0
         print_status("La fusion a échoué : les parties sont gardées séparément (Plex les regroupe).", "warning")
@@ -377,10 +381,10 @@ def remove_other_server_parts(folder, stem, keep):
     the whole game): useless once the game is complete."""
     if not os.path.isdir(folder):
         return
-    keep = {os.path.abspath(p) for p in keep}
+    keep = {os.path.abspath(f) for p in keep for f in (p, thumb_path(p))}
     for name in os.listdir(folder):
         path = os.path.abspath(os.path.join(folder, name))
-        if name.startswith(stem + " [") and re.search(r"\] - pt\d+\.mp4$", name) and path not in keep:
+        if name.startswith(stem + " [") and re.search(r"\] - pt\d+\.(mp4|jpg)$", name) and path not in keep:
             try:
                 os.remove(path)
             except OSError:

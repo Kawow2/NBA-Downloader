@@ -57,6 +57,7 @@ Si Windows refuse d'exécuter le script : `Set-ExecutionPolicy -Scope CurrentUse
 | `python main.py --set-nba-dir DOSSIER` | dossier par défaut de la NBA |
 | `python main.py --set-media-dir DOSSIER` | dossier par défaut des films & séries |
 | `python main.py --faststart DOSSIER` | optimise les `.mp4` déjà téléchargés (voir « faststart » ci-dessous) |
+| `python main.py --thumbnails DOSSIER` | crée les miniatures Plex sans spoiler des matchs NBA déjà téléchargés (voir « Miniatures sans spoiler ») |
 | `--anime-dir` / `--nba-dir` / `--media-dir DOSSIER` | dossier pour ce lancement seulement (variables `CHEMIN_ANIME` / `CHEMIN_NBA` / `CHEMIN_MEDIA` de `start.sh`, `$CheminAnime` / `$CheminNBA` / `$CheminMedia` de `start.ps1`) |
 
 Sans `anime`/`nba`/`media`, les options propres à un seul des programmes (ex. `--player` pour l'anime, `--site` pour la NBA, `--source`/`--all` pour les films & séries) ou l'adresse donnée à `--url` suffisent à choisir.
@@ -75,7 +76,7 @@ Sans `anime`/`nba`/`media`, les options propres à un seul des programmes (ex. `
 | Films & Séries : connexions en parallèle par fichier | 16 |
 | Films & Séries : qualité max préférée | la meilleure |
 
-Tout est mémorisé dans `src/utils/config/config.json`. Le dernier réglage optimise les `.mp4` déjà présents dans les trois dossiers.
+Tout est mémorisé dans `src/utils/config/config.json`. Le réglage `10` optimise les `.mp4` déjà présents dans les trois dossiers ; le `11` crée les miniatures sans spoiler des matchs NBA déjà téléchargés.
 
 ### Faststart (« Web Optimized »)
 
@@ -194,9 +195,19 @@ Le menu, l'option « toutes les sources » et le nommage Plex la prennent en com
 
 ```
 <dossier NBA>\Season 2026\NBA - 2026-06-13 - New York Knicks vs San Antonio Spurs - NBA Finals Game 5.mp4
+<dossier NBA>\Season 2026\NBA - 2026-06-13 - New York Knicks vs San Antonio Spurs - NBA Finals Game 5.jpg   ← miniature sans spoiler
 ```
 
 Créez une bibliothèque Plex de type **Séries TV** sur le dossier qui **contient** le dossier NBA (ex. bibliothèque `/srv/plex/Sports` pour le dossier NBA `/srv/plex/Sports/NBA`). Plex reconnaît les épisodes datés (`AAAA-MM-JJ`). Les parties non fusionnées sont nommées `... - pt1.mp4`, `... - pt2.mp4`, que Plex regroupe.
+
+## Miniatures sans spoiler
+
+Sans image fournie, Plex fabrique la miniature d'un épisode à partir d'une image prise dans la vidéo, souvent vers la fin du match : le score final est visible dans la liste avant même de lancer la lecture. Chaque match téléchargé reçoit donc sa propre miniature, une image `.jpg` du même nom posée à côté de la vidéo, prise **une minute après le début** (avant que quoi que ce soit ne soit joué). Plex l'utilise à la place de la sienne. Un match gardé en plusieurs parties reçoit la même image pour chaque partie, prise au début de la première (le début de la partie 2 montrerait le score à la mi-temps).
+
+- **Matchs déjà téléchargés** : `python main.py --thumbnails "/srv/plex/Sports/NBA"` (ou `4. Réglages` → `11`), puis dans Plex, sur la série NBA : `…` → **Actualiser les métadonnées**, pour remplacer les anciennes miniatures.
+- La bibliothèque doit lire les fichiers locaux (« local media assets ») : c'est le cas par défaut avec l'agent *Personal Media Shows* ; avec l'agent *Plex Series*, vérifiez que l'option « Use local assets » est cochée dans les réglages avancés de la bibliothèque.
+- Les **aperçus de la barre de lecture** (les images qui défilent quand on déplace le curseur) restent générés par Plex à partir de toute la vidéo. Pour ne rien voir non plus en déplaçant le curseur : réglages avancés de la bibliothèque → « Générer les miniatures d'aperçu vidéo » → *Jamais*.
+- ffmpeg est nécessaire (sans lui, Plex garde sa propre miniature).
 
 ## Dernier match d'une équipe, sans rien faire
 
