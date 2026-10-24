@@ -24,7 +24,7 @@ REQUIRED_MODULES = ("requests", "bs4", "tqdm", "yt_dlp", "curl_cffi", "Crypto", 
 # command line without "anime"/"nba"/"media" is meant for. Media is checked
 # first in guess_category() because it shares --search with anime.
 _ANIME_ONLY = ("--search", "--episodes", "--player", "--fast", "--mp4", "--tool", "--no-mal", "--latest")
-_NBA_ONLY = ("--site", "--debug", "--set-default-dir")
+_NBA_ONLY = ("--site", "--debug", "--set-default-dir", "--auto")
 _MEDIA_ONLY = ("--source", "--all", "--list-sources")
 _LAUNCHER_OPTS = ("--anime-dir", "--nba-dir", "--media-dir",
                   "--set-anime-dir", "--set-nba-dir", "--set-media-dir", "--faststart")

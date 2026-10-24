@@ -61,17 +61,42 @@ def print_games(games):
     print_separator()
 
 
+def find_latest_game(site, query):
+    """Newest match matching `query` (search already sorts newest first),
+    or None. Shared by the automatic menu option and `--search --auto`."""
+    print_status(f"Recherche du dernier match de « {query} »...", "loading")
+    games = site.search(query, 10)
+    if not games:
+        print_status("Aucun match trouvé.", "error")
+        return None
+    game = games[0]
+    when = f" ({game.date.strftime('%d/%m/%Y')})" if game.date else ""
+    print_status(f"Dernier match : {game.title}{when}", "success")
+    return game
+
+
 def choose_game(site):
+    """Returns (url, listed_game, auto). `auto` True means download it
+    hands-free (first server, every part, no questions)."""
     while True:
         print(f"{Colors.BOLD}Que voulez-vous faire ?{Colors.ENDC}")
         print("  1. Afficher les 10 derniers matchs du site")
         print("  2. Rechercher un match")
+        print("  3. Dernier match d'une équipe (téléchargement automatique)")
         print(f"  {Colors.DIM}(ou collez directement l'URL d'un match — q pour quitter){Colors.ENDC}")
         choice = ask("Choix : ")
         if choice.lower() in ("q", "quit", "exit"):
-            return None, None
+            return None, None, False
         if choice.startswith("http"):
-            return choice, None
+            return choice, None, False
+        if choice == "3":
+            query = ask("Équipe (ex : Knicks, Lakers, Celtics) : ")
+            if not query:
+                continue
+            game = find_latest_game(site, query)
+            if game:
+                return game.url, game, True
+            continue
         if choice == "1":
             print_status("Récupération des derniers matchs...", "loading")
             games = site.latest_games(10)
@@ -82,7 +107,7 @@ def choose_game(site):
             print_status(f"Recherche de « {query} »...", "loading")
             games = site.search(query, 10)
         else:
-            print_status("Tapez 1 ou 2.", "error")
+            print_status("Tapez 1, 2 ou 3.", "error")
             continue
 
         if not games:
@@ -94,8 +119,18 @@ def choose_game(site):
             if not pick:
                 break
             if pick.isdigit() and 1 <= int(pick) <= len(games):
-                return games[int(pick) - 1].url, games[int(pick) - 1]
+                return games[int(pick) - 1].url, games[int(pick) - 1], False
             print_status("Numéro invalide.", "error")
+
+
+def first_section(servers):
+    """Non-interactive counterpart of choose_section: the first game on the
+    page (its servers), used by the automatic mode."""
+    sections = list(dict.fromkeys(s.section for s in servers if s.section))
+    if len(sections) < 2:
+        return None, servers
+    chosen = sections[0]
+    return chosen, [s for s in servers if s.section == chosen]
 
 
 def choose_section(servers):
@@ -177,16 +212,17 @@ def choose_dest(cli_dest):
     return typed
 
 
-def file_name(game, dest, section, listed):
+def file_name(game, dest, section, listed, auto=False):
     """Folder and file name for the game: the chosen game's heading on a
     multi-game page, else the title shown in the search/latest list, else
     the page title. When that doesn't identify a game (no date or no
-    "A vs B"), ask for a name, suggesting one."""
+    "A vs B"), ask for a name, suggesting one - except in automatic mode,
+    where the suggested name is used as-is without asking."""
     if listed and not game.date and listed.date:
         game.date = listed.date
     title = section or (listed.title if listed else None) or game.title
     folder, stem = plex_target(game, dest, title=title)
-    if game.date and re.search(r"\bvs?\.?\s", title, re.IGNORECASE):
+    if auto or (game.date and re.search(r"\bvs?\.?\s", title, re.IGNORECASE)):
         return folder, stem
     print(f"\n{Colors.BOLD}{Colors.HEADER}📝 NOM DU FICHIER{Colors.ENDC}")
     print(f"  {Colors.DIM}Proposé : {stem}.mp4{Colors.ENDC}")
@@ -202,7 +238,7 @@ def file_name(game, dest, section, listed):
     return folder, stem
 
 
-def process_game(site, url, cli_dest, listed=None):
+def process_game(site, url, cli_dest, listed=None, auto=False):
     print_status("Analyse de la page du match...", "loading")
     game, servers = site.fetch_game(url)
     if not game:
@@ -214,12 +250,26 @@ def process_game(site, url, cli_dest, listed=None):
         print_status("Relancez avec --debug et envoyez le contenu du dossier ./debug pour adapter le parseur.", "info")
         return
 
-    section, servers = choose_section(servers)
-    server = choose_server(servers)
-    picked = choose_parts(server)
-    dest = choose_dest(cli_dest)
+    if auto:
+        # Hands-free: first game on the page, first server, every part, the
+        # default folder, the suggested name - no questions.
+        section, servers = first_section(servers)
+        server = servers[0]
+        picked = list(range(len(server.parts)))
+        dest = cli_dest or default_dir()
+        problem = folder_problem(dest)
+        if problem:
+            print_status(problem, "error")
+            return
+        print_status(f"Automatique : serveur « {server.name} », "
+                     f"{len(picked)} partie{'s' if len(picked) > 1 else ''}, dossier {dest}", "info")
+    else:
+        section, servers = choose_section(servers)
+        server = choose_server(servers)
+        picked = choose_parts(server)
+        dest = choose_dest(cli_dest)
 
-    folder, stem = file_name(game, dest, section, listed)
+    folder, stem = file_name(game, dest, section, listed, auto=auto)
     final_path = os.path.join(folder, stem + ".mp4")
     print_status(f"Fichier : {final_path}", "info")
     if os.path.exists(final_path):
@@ -371,6 +421,10 @@ def main():
     parser = argparse.ArgumentParser(prog="main.py nba",
                                      description="Télécharge des matchs NBA depuis basketball-video.com en .mp4 pour Plex.")
     parser.add_argument("--url", help="URL de la page d'un match")
+    parser.add_argument("--search", metavar="ÉQUIPE", help="Recherche une équipe / un match (ex : \"Knicks\")")
+    parser.add_argument("--auto", action="store_true",
+                        help="Sans rien demander : télécharge le dernier match trouvé (1er serveur, toutes les parties). "
+                             "Avec --search (une équipe) ou --url")
     parser.add_argument("--dest", help="Dossier de destination (sinon le chemin par défaut)")
     parser.add_argument("--default-dir", metavar="CHEMIN", help="Chemin proposé par défaut pour cette session (le dossier NBA du menu)")
     parser.add_argument("--set-default-dir", metavar="CHEMIN", help="Définit le chemin par défaut puis quitte")
@@ -409,14 +463,25 @@ def main():
     print()
 
     if args.url:
-        process_game(site, args.url, args.dest)
+        process_game(site, args.url, args.dest, auto=args.auto)
+        return
+
+    if args.search:
+        game = find_latest_game(site, args.search)
+        if not game:
+            return
+        if args.auto:
+            process_game(site, game.url, args.dest, listed=game, auto=True)
+            return
+        # Without --auto: let the user confirm / pick the parts as usual.
+        process_game(site, game.url, args.dest, listed=game)
         return
 
     while True:
-        url, listed = choose_game(site)
+        url, listed, auto = choose_game(site)
         if not url:
             break
-        process_game(site, url, args.dest, listed)
+        process_game(site, url, args.dest, listed, auto=auto)
         if not yes("\nTélécharger un autre match ?", default=False):
             break
         print()

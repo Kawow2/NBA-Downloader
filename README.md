@@ -182,7 +182,7 @@ Le menu, l'option « toutes les sources » et le nommage Plex la prennent en com
 
 ## Déroulement
 
-1. **Menu** : `1` = les 10 derniers matchs du site, `2` = recherche (ex. `knicks spurs`) puis les 10 derniers résultats. On peut aussi coller directement l'URL d'un match.
+1. **Menu** : `1` = les 10 derniers matchs du site, `2` = recherche (ex. `knicks spurs`) puis les 10 derniers résultats, `3` = **dernier match d'une équipe en automatique** (voir plus bas). On peut aussi coller directement l'URL d'un match.
 2. **Match** : choisir le numéro dans la liste.
 3. **Serveur** : choisir le serveur (VOE, Filemoon, OK.ru, Streamtape...).
 4. **Parties** : taper les parties voulues, ex. `1-2-3` (= parties 1, 2 et 3), `2`, ou Entrée pour toutes.
@@ -198,10 +198,26 @@ Le menu, l'option « toutes les sources » et le nommage Plex la prennent en com
 
 Créez une bibliothèque Plex de type **Séries TV** sur le dossier qui **contient** le dossier NBA (ex. bibliothèque `/srv/plex/Sports` pour le dossier NBA `/srv/plex/Sports/NBA`). Plex reconnaît les épisodes datés (`AAAA-MM-JJ`). Les parties non fusionnées sont nommées `... - pt1.mp4`, `... - pt2.mp4`, que Plex regroupe.
 
+## Dernier match d'une équipe, sans rien faire
+
+Pour télécharger le **dernier match** d'une équipe sans répondre à aucune question : le programme cherche l'équipe, prend le match le plus récent, choisit le **premier serveur** et **toutes les parties**, et enregistre dans le dossier NBA.
+
+- Dans le menu : option **`3`**, puis le nom de l'équipe (ex. `Knicks`).
+- En ligne de commande : `python main.py nba --search "Knicks" --auto`
+
+```bash
+python main.py nba --search "Lakers" --auto        # dernier match des Lakers, automatique
+python main.py nba --url "https://basketball-video.com/..." --auto   # ce match, automatique
+```
+
+Sans `--auto`, `--search` affiche le match trouvé puis pose les questions habituelles (serveur, parties, chemin). En automatique, si le premier serveur échoue, le match est quand même repris en entier depuis le serveur suivant (comme d'habitude).
+
 ## Options (`python main.py nba ...`)
 
 | Option | Rôle |
 | --- | --- |
+| `--search <ÉQUIPE>` | cherche une équipe / un match (ex. `"Knicks"`) et prend le plus récent |
+| `--auto` | ne rien demander : dernier match trouvé, 1er serveur, toutes les parties (avec `--search` ou `--url`) |
 | `--url <URL>` | télécharger directement ce match |
 | `--dest <chemin>` | dossier de destination sans poser la question |
 | `--site <URL>` | si le site change de domaine (mémorisé) |
