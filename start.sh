@@ -12,8 +12,6 @@
 #   ./start.sh nba --url "https://basketball-video.com/..."
 #   ./start.sh films --url "https://nakios.rent/series/87108"
 #
-# Push notification when the program finishes: set NTFY_TOPIC below.
-#
 # Manual equivalent:
 #   python3 -m venv .venv && . .venv/bin/activate
 #   pip install -r requirements.txt && python main.py
@@ -26,33 +24,6 @@
 CHEMIN_ANIME=""
 CHEMIN_NBA=""
 CHEMIN_FILMS=""
-
-# Push notification via ntfy when the program finishes (optional).
-#   1. Install the "ntfy" app on your phone (iOS/Android), or open ntfy.sh.
-#   2. Pick a long, HARD-TO-GUESS topic name — it works like a password:
-#      anyone who knows it can read (and send) your notifications.
-#   3. Subscribe to that topic in the app, then write it below (or export
-#      NTFY_TOPIC before launching). Leave empty to disable notifications.
-NTFY_TOPIC="${NTFY_TOPIC:-}"
-NTFY_SERVER="${NTFY_SERVER:-https://ntfy.sh}"
-
-# Send a "download finished" push via ntfy. No-op if NTFY_TOPIC is empty or
-# curl is missing; never fails the run.
-notify_done() {
-    local status="${1:-0}" body tags prio
-    [ -n "$NTFY_TOPIC" ] || return 0
-    command -v curl >/dev/null 2>&1 || return 0
-    if [ "$status" -eq 0 ]; then
-        body="Téléchargement terminé ✅ (sur $(hostname 2>/dev/null))"
-        tags="white_check_mark"; prio="default"
-    else
-        body="Arrêté avec le code $status ⚠️ (sur $(hostname 2>/dev/null))"
-        tags="warning"; prio="high"
-    fi
-    curl -fsS --max-time 15 \
-        -H "Title: NBA Downloader" -H "Tags: $tags" -H "Priority: $prio" \
-        -d "$body" "$NTFY_SERVER/$NTFY_TOPIC" >/dev/null 2>&1 || true
-}
 
 cd "$(dirname "$0")" || exit 1
 
@@ -116,17 +87,8 @@ ARGS=()
 [ -n "$CHEMIN_FILMS" ] && ARGS+=(--films-dir "$CHEMIN_FILMS")
 if [ -n "$START_SH_IN_TMUX" ]; then
     "$VENV_PY" main.py "${ARGS[@]}" "$@"
-    status=$?
-    notify_done "$status"
     echo
     read -rp "Programme terminé. Entrée pour fermer la session tmux... " _
-    exit "$status"
-fi
-
-if [ -n "$NTFY_TOPIC" ]; then
-    "$VENV_PY" main.py "${ARGS[@]}" "$@"
-    status=$?
-    notify_done "$status"
-    exit "$status"
+    exit 0
 fi
 exec "$VENV_PY" main.py "${ARGS[@]}" "$@"
