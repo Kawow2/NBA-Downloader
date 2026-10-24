@@ -107,6 +107,14 @@ def normalize_text(text):
     return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
 
 
+def game_matches(game, query):
+    """True if every word of query (e.g. "knicks", "new york") is in the
+    game's title or URL, accents and case ignored."""
+    tokens = normalize_text(query).split()
+    hay = normalize_text(game.title + " " + urlparse(game.url).path)
+    return bool(tokens) and all(t in hay for t in tokens)
+
+
 def parse_date(text):
     """Find a game date in a title or URL slug ('June 13, 2026',
     'june--13-2026', '13.06.2026', '2026-06-13'). Returns a date or None."""
@@ -392,6 +400,25 @@ class Site:
                 break
         return self._sort_newest_first(games)[:limit]
 
+    def iter_latest_games(self, max_pages=40):
+        """The site's games from the newest, page after page (each page
+        sorted newest first), fetched only as far as the caller reads."""
+        seen = set()
+        for n in range(1, max_pages + 1):
+            html = self.get(self._page_url(n), allow_error=(n > 1))
+            if not html:
+                return
+            new = 0
+            for g in self._sort_newest_first(self.extract_games(html, self._page_url(n))):
+                key = g.url.rstrip("/")
+                if key in seen:
+                    continue
+                seen.add(key)
+                new += 1
+                yield g
+            if not new:
+                return  # past the last page the site serves the first one again
+
     # ----------------------------------------------------------------- search
     def _search_requests(self, query):
         """Candidate search requests, the site's own search form first."""
@@ -417,20 +444,15 @@ class Site:
         return reqs
 
     def search(self, query, limit=10, crawl_pages=15):
-        tokens = normalize_text(query).split()
-        if not tokens:
+        if not normalize_text(query).split():
             return []
-
-        def matches(g):
-            hay = normalize_text(g.title + " " + urlparse(g.url).path)
-            return all(t in hay for t in tokens)
 
         results, seen = [], set()
 
         def add(games):
             for g in games:
                 key = g.url.rstrip("/")
-                if key not in seen and matches(g):
+                if key not in seen and game_matches(g, query):
                     seen.add(key)
                     results.append(g)
 

@@ -39,6 +39,20 @@ def _probe(url, headers):
     return None
 
 
+def remote_size(url, headers):
+    """Size in bytes of a remote file without downloading it (byte-range
+    probe, else the HEAD Content-Length), or None."""
+    found = _probe(url, headers)
+    if found:
+        return found[1]
+    try:
+        r = requests.head(url, headers=headers, allow_redirects=True, timeout=20)
+        size = int(r.headers.get("Content-Length") or 0)
+        return size if r.status_code < 400 and size > 0 else None
+    except (requests.RequestException, ValueError):
+        return None
+
+
 def download(url, path, headers, connections=MAX_CONNECTIONS, label=None):
     """True once path holds the whole file. False when the server doesn't
     accept ranges or keeps refusing them: the caller then downloads the

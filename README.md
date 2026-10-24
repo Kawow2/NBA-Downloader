@@ -123,7 +123,7 @@ Sur un serveur de test qui bride chaque connexion comme les hébergeurs : épiso
 
 ## Déroulement
 
-1. **Menu** : `1` = les 10 derniers matchs du site, `2` = recherche (ex. `knicks spurs`) puis les 10 derniers résultats. On peut aussi coller directement l'URL d'un match.
+1. **Menu** : `1` = les 10 derniers matchs du site, `2` = recherche (ex. `knicks spurs`) puis les 10 derniers résultats, `3` = **dernier match d'une équipe en automatique** (voir plus bas). On peut aussi coller directement l'URL d'un match.
 2. **Match** : choisir le numéro dans la liste.
 3. **Serveur** : choisir le serveur (VOE, Filemoon, OK.ru, Streamtape...).
 4. **Parties** : taper les parties voulues, ex. `1-2-3` (= parties 1, 2 et 3), `2`, ou Entrée pour toutes.
@@ -139,12 +139,46 @@ Sur un serveur de test qui bride chaque connexion comme les hébergeurs : épiso
 
 Créez une bibliothèque Plex de type **Séries TV** sur le dossier qui **contient** le dossier NBA (ex. bibliothèque `/srv/plex/Sports` pour le dossier NBA `/srv/plex/Sports/NBA`). Plex reconnaît les épisodes datés (`AAAA-MM-JJ`). Les parties non fusionnées sont nommées `... - pt1.mp4`, `... - pt2.mp4`, que Plex regroupe.
 
+## Dernier match d'une équipe, sans rien faire
+
+Pour télécharger le **dernier match** d'une équipe sans répondre à aucune question : le programme cherche l'équipe, prend le match le plus récent, choisit le **premier serveur** et **toutes les parties**, et enregistre dans le dossier NBA.
+
+1. **Recherche** : il regarde les **10 derniers matchs** du site ; si l'équipe y est, il prend son match le plus récent. Sinon, il regarde les **10 suivants**, et ainsi de suite (jusqu'aux 300 derniers matchs). Les pages ne sont lues qu'au besoin.
+2. **Taille** : un match complet pèse plusieurs Go. **Moins de 1 Go** (toutes parties comprises), c'est un résumé, des extraits ou un fichier cassé : **pas téléchargé**. La taille annoncée par le serveur est vérifiée avant de télécharger ; quand le serveur ne l'annonce pas (VOE, Filemoon…), c'est le fichier téléchargé qui est vérifié, puis supprimé s'il est trop petit. Le serveur suivant est alors essayé ; si aucun ne propose plus de 1 Go, rien n'est gardé.
+
+- Dans le menu : option **`3`**, puis le nom de l'équipe (ex. `Knicks`).
+- En ligne de commande : `python main.py nba --search "Knicks" --auto`
+
+```bash
+python main.py nba --search "Lakers" --auto        # dernier match des Lakers, automatique
+python main.py nba --url "https://basketball-video.com/..." --auto   # ce match, automatique
+```
+
+Sans `--auto`, `--search` trouve le match de la même façon puis pose les questions habituelles (serveur, parties, chemin), sans la règle des 1 Go. En automatique, si le premier serveur échoue, le match est quand même repris en entier depuis le serveur suivant, et les fichiers temporaires d'anciens téléchargements sont gardés au lieu de demander s'il faut les supprimer.
+
+## Miniatures sans spoiler
+
+Sans image fournie, Plex fabrique la miniature d'un épisode à partir d'une image prise dans la vidéo, souvent vers la fin du match : le score final est visible dans la liste avant même de lancer la lecture. Chaque match téléchargé reçoit donc sa propre miniature, une image `.jpg` du même nom posée à côté de la vidéo, prise **une minute après le début** (avant que quoi que ce soit ne soit joué). Plex l'utilise à la place de la sienne. Un match gardé en plusieurs parties reçoit la même image pour chaque partie, prise au début de la première (le début de la partie 2 montrerait le score à la mi-temps).
+
+```
+<dossier NBA>\Season 2026\NBA - 2026-06-13 - New York Knicks vs San Antonio Spurs.mp4
+<dossier NBA>\Season 2026\NBA - 2026-06-13 - New York Knicks vs San Antonio Spurs.jpg   ← miniature sans spoiler
+```
+
+- **Matchs déjà téléchargés** : `python main.py nba --thumbnails "/srv/plex/Sports/NBA"` (seulement les vidéos sans image), puis dans Plex, sur la série NBA : `…` → **Actualiser les métadonnées**, pour remplacer les anciennes miniatures.
+- La bibliothèque doit lire les fichiers locaux (« local media assets ») : c'est le cas par défaut avec l'agent *Personal Media Shows* ; avec l'agent *Plex Series*, vérifiez que « Use local assets » est coché dans les réglages avancés de la bibliothèque.
+- Les **aperçus de la barre de lecture** (les images qui défilent quand on déplace le curseur) restent générés par Plex à partir de toute la vidéo. Pour ne rien voir non plus en déplaçant le curseur : réglages avancés de la bibliothèque → « Générer les miniatures d'aperçu vidéo » → *Jamais*.
+- ffmpeg est nécessaire (sans lui, Plex garde sa propre miniature).
+
 ## Options (`python main.py nba ...`)
 
 | Option | Rôle |
 | --- | --- |
+| `--search <ÉQUIPE>` | dernier match d'une équipe (ex. `"Knicks"`) : les derniers matchs du site sont parcourus 10 par 10 |
+| `--auto` | ne rien demander : 1er serveur, toutes les parties, et pas de téléchargement sous 1 Go (avec `--search` ou `--url`) |
 | `--url <URL>` | télécharger directement ce match |
 | `--dest <chemin>` | dossier de destination sans poser la question |
+| `--thumbnails <DOSSIER>` | crée les miniatures Plex sans spoiler des matchs déjà téléchargés dans DOSSIER, puis quitte |
 | `--site <URL>` | si le site change de domaine (mémorisé) |
 | `--quality 720\|1080\|1440\|2160\|best` | qualité max (défaut 1080p, mémorisée) ; `best` ≈ 20 Go par match chez OK.ru |
 | `--threads <N>` | morceaux téléchargés en parallèle (défaut 32, mémorisé) ; pour un fichier direct (.mp4, ex. OK.ru), nombre de connexions simultanées (16 max) |
