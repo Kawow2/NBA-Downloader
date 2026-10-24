@@ -3,9 +3,12 @@
 # environment (.venv), created on first run.
 #
 #   ./start.sh                  menu: Anime, NBA or Films & Séries
-#   ./start.sh --tmux           same, inside a tmux session (over SSH: the
-#                               downloads keep going if the connection drops;
-#                               come back with ./start.sh --tmux again)
+#                               (over SSH: runs inside tmux automatically, so
+#                               the downloads survive a dropped connection or
+#                               the client PC being switched off — reattach
+#                               later with ./start.sh again)
+#   ./start.sh --tmux           force the tmux session (also works locally)
+#   ./start.sh --no-tmux        force a plain run, even over SSH
 #   ./start.sh nba --url "https://basketball-video.com/..."
 #   ./start.sh films --url "https://nakios.rent/series/87108"
 #
@@ -24,20 +27,26 @@ CHEMIN_FILMS=""
 
 cd "$(dirname "$0")" || exit 1
 
+# Over SSH, run inside a persistent tmux session by default so downloads keep
+# going if the connection drops (or the client PC is switched off). --tmux
+# forces it everywhere; --no-tmux opts out.
+want_tmux=""
 if [ "$1" = "--tmux" ]; then
+    shift; want_tmux=1
+elif [ "$1" = "--no-tmux" ]; then
     shift
-    if [ -z "$TMUX" ]; then
-        if command -v tmux >/dev/null 2>&1; then
-            # -A: reattach to the running session if there is one.
-            # START_SH_IN_TMUX: pause at the end, or tmux would close the
-            # window (and any error message) as soon as the program stops.
-            exec tmux new-session -A -s downloader "START_SH_IN_TMUX=1 $(printf '%q ' "$PWD/start.sh" "$@")"
-        fi
-        echo "tmux n'est pas installé (ex. sudo apt install tmux) : lancement sans tmux."
+elif [ -n "$SSH_CONNECTION" ] && [ -z "$STY" ]; then
+    want_tmux=1
+fi
+
+if [ -n "$want_tmux" ] && [ -z "$TMUX" ] && [ -z "$STY" ]; then
+    if command -v tmux >/dev/null 2>&1; then
+        # -A: reattach to the running session if there is one.
+        # START_SH_IN_TMUX: pause at the end, or tmux would close the
+        # window (and any error message) as soon as the program stops.
+        exec tmux new-session -A -s downloader "START_SH_IN_TMUX=1 $(printf '%q ' "$PWD/start.sh" "$@")"
     fi
-elif [ -n "$SSH_CONNECTION" ] && [ -z "$TMUX" ] && [ -z "$STY" ]; then
-    echo "Astuce SSH : ./start.sh --tmux garde les téléchargements actifs si la connexion coupe"
-    echo "            (se détacher : Ctrl+B puis D ; revenir : ./start.sh --tmux)."
+    echo "tmux n'est pas installé (ex. sudo apt install tmux) : lancement sans tmux." >&2
 fi
 
 VENV_PY=".venv/bin/python"
