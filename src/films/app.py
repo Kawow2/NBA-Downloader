@@ -699,12 +699,41 @@ def process_movie(provider, media, dest):
     return ok
 
 
+def _download_single_episode(provider, media, dest, sn, en):
+    """Télécharge un seul épisode (saison sn, épisode en) sans passer par la
+    liste des saisons/épisodes — utile pour une URL moviepluto qui pointe
+    directement un épisode, sans métadonnées TMDB."""
+    folder, stem = plex.series_target(dest, media.title, sn, en, media.year, None)
+    out_path = os.path.join(folder, stem + ".mp4")
+    existing = _already_downloaded(out_path)
+    if existing:
+        print_status(f"Déjà présent : {existing}", "success")
+        return True
+    print_separator(title=f"S{sn:02d}E{en:02d}")
+    ep_sources = provider.sources(media, season=sn, episode=en)
+    if not ep_sources:
+        _no_sources_help(provider, media, sn, en)
+        clean_temp_files(folder, stem, keep_own=True)
+        return False
+    prefer = choose_source(ep_sources, sys.stdin.isatty())
+    ok = download_media(provider, media, out_path, season=sn, episode=en, prefer=prefer, sources=ep_sources)
+    clean_temp_files(folder, stem, keep_own=True)
+    return ok
+
+
 def process_series(provider, media, dest, cli_season=None, cli_episodes=None):
     media, seasons = provider.details(media)
     print(f"\n{Colors.BOLD}{Colors.OKGREEN}📺 {media.title}{Colors.ENDC}"
           + (f"  {Colors.DIM}({media.year}){Colors.ENDC}" if media.year else ""))
     if not seasons:
-        print_status("Impossible de lister les saisons (API différente ?). Relancez avec --debug.", "error")
+        # URL moviepluto .../<id>/<saison>/<épisode> : on peut télécharger cet
+        # épisode précis sans la liste des saisons (métadonnées indisponibles).
+        if getattr(media, "pinned_season", None) and getattr(media, "pinned_episode", None):
+            return _download_single_episode(provider, media, dest,
+                                            int(media.pinned_season), int(media.pinned_episode))
+        print_status("Impossible de lister les saisons. Ajoute une clé TMDB (--tmdb-key) pour "
+                     "parcourir saisons/épisodes, ou colle une URL moviepluto avec la saison et "
+                     "l'épisode (.../watch/<slug>/<id>/<saison>/<épisode>).", "error")
         return False
 
     # Choix des saisons
@@ -913,6 +942,9 @@ def main():
                              "vidzee ; mémorisé)")
     parser.add_argument("--moviepluto-site", metavar="URL",
                         help="URL de moviepluto si le domaine change (mémorisée)")
+    parser.add_argument("--tmdb-key", metavar="CLÉ",
+                        help="Clé API TMDB (gratuite, themoviedb.org) pour la recherche VOSTFR moviepluto "
+                             "indépendamment de nakios (mémorisée, jamais commitée)")
     parser.add_argument("--season", help="Saison(s) pour une série (ex. 1, 1-3, all)")
     parser.add_argument("--episodes", help="Épisode(s) (ex. 1-5, 1,3,5, all)")
     parser.add_argument("--dest", help="Dossier de destination (sinon le chemin par défaut)")
@@ -985,6 +1017,9 @@ def main():
         set_setting("films_moviepluto_server", args.moviepluto_server.strip())
     if args.moviepluto_site:
         set_setting("films_moviepluto_site_url", args.moviepluto_site.rstrip("/"))
+    if args.tmdb_key:
+        set_setting("films_tmdb_key", args.tmdb_key.strip())
+        print_status("Clé TMDB enregistrée ✅ (recherche VOSTFR moviepluto indépendante de nakios).", "success")
     if args.quality:
         set_setting("films_quality", args.quality)
     if args.threads:
@@ -1018,7 +1053,8 @@ def main():
     if _lang_pref == "vost":
         srv = get_setting("films_moviepluto_server")
         subs_label = subs.subtitles_setting()
-        print(f"  {Colors.DIM}Langue : VOSTFR / VOST (moviepluto){Colors.ENDC}")
+        reche = "TMDB (clé)" if get_setting("films_tmdb_key") else "nakios (si session) / URL collée"
+        print(f"  {Colors.DIM}Langue : VOSTFR / VOST (moviepluto) · recherche : {reche}{Colors.ENDC}")
         print(f"  {Colors.DIM}Serveur moviepluto : {srv or '(tous, ordre par défaut)'} · "
               f"sous-titres : {'aucun' if not subs.subtitles_enabled() else subs_label}{Colors.ENDC}")
     elif _lang_pref == "all":
@@ -1041,18 +1077,27 @@ def main():
                      "success" if ok else "error")
         return
 
-    # La session Cloudflare sert à la recherche « façon TMDB » (nakios ET
-    # moviepluto, qui réutilise cette recherche pour trouver l'id). On l'obtient
-    # si possible ; ce n'est pas bloquant (zone + AllDebrid, ou une URL collée
-    # pour moviepluto, fonctionnent sans).
-    nakios_ready = ensure_session(site, sys.stdin.isatty(), use_browser=not args.no_browser,
-                                  browser_visible=args.browser_visible, profile_dir=profile_dir)
-    if not nakios_ready:
-        if _lang_pref == "vost":
-            print_status("Session indisponible : la recherche moviepluto a besoin de la session, "
-                         "mais tu peux toujours coller une URL moviepluto (.../watch/<slug>/<id>/...).",
-                         "warning")
+    # Métadonnées (recherche / saisons / épisodes) « façon TMDB ».
+    #  - VOSTFR (moviepluto) : via une clé TMDB si configurée (indépendant de
+    #    nakios), sinon via une session nakios DÉJÀ en cache (test rapide, sans
+    #    navigateur ni saisie de cookie — moviepluto n'a pas besoin du streaming
+    #    nakios). À défaut, on colle une URL moviepluto.
+    #  - VF : session nakios complète (navigateur Cloudflare), comme avant.
+    if _lang_pref == "vost":
+        if get_setting("films_tmdb_key"):
+            nakios_ready = False
+            print_status("Recherche VOSTFR via TMDB (clé configurée).", "info")
         else:
+            nakios_ready, _ = site.probe_session()  # rapide, sans navigateur
+            if not nakios_ready:
+                print_status("Recherche par titre indisponible (ni clé TMDB, ni session nakios). "
+                             "Colle une URL moviepluto (.../watch/<slug>/<id>[/<saison>/<épisode>]), "
+                             "ou ajoute une clé TMDB gratuite : --tmdb-key \"TA_CLÉ\" "
+                             "(themoviedb.org → Paramètres → API).", "info")
+    else:
+        nakios_ready = ensure_session(site, sys.stdin.isatty(), use_browser=not args.no_browser,
+                                      browser_visible=args.browser_visible, profile_dir=profile_dir)
+        if not nakios_ready:
             print_status("Nakios (streaming) indisponible pour l'instant (session non obtenue).", "warning")
 
     providers = build_providers(site, nakios_ready, lang_pref=_lang_pref)

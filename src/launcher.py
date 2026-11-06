@@ -31,7 +31,7 @@ REQUIRED_MODULES = ("requests", "bs4", "tqdm", "yt_dlp", "curl_cffi", "Crypto", 
 _ANIME_ONLY = ("--search", "--episodes", "--player", "--fast", "--mp4", "--tool", "--no-mal", "--latest")
 _NBA_ONLY = ("--quality", "--site", "--debug", "--default-dir", "--set-default-dir")
 _FILMS_ONLY = ("--profile-id", "--sources-path", "--season", "--cookie", "--kind",
-               "--moviepluto-server", "--moviepluto-site", "--subtitles")
+               "--moviepluto-server", "--moviepluto-site", "--subtitles", "--tmdb-key")
 _LAUNCHER_OPTS = ("--anime-dir", "--nba-dir", "--films-dir",
                   "--set-anime-dir", "--set-nba-dir", "--set-films-dir", "--faststart")
 
@@ -208,11 +208,13 @@ class Launcher:
             films_lang = self.get_setting("films_lang")
             films_srv = self.get_setting("films_moviepluto_server")
             films_subs = self.get_setting("films_subtitles") or "fr,vo"
+            films_tmdb = "✓ configurée" if self.get_setting("films_tmdb_key") else "(aucune — nakios ou URL collée)"
             print(f"  11. Films : langue par défaut (VF / VOSTFR)   : "
                   f"{(films_lang or '').upper() or '(demandé à chaque fois)'}")
-            print(f"  12. Films : serveur moviepluto (VOSTFR)       : {films_srv or '(tous, ordre par défaut)'}")
-            print(f"  13. Films : sous-titres VOST (sidecar Plex)   : {films_subs}")
-            print("  14. Optimiser/réparer les .mp4 déjà téléchargés (lecture immédiate dans Plex, son cassé)")
+            print(f"  12. Films : clé TMDB (recherche VOSTFR)       : {films_tmdb}")
+            print(f"  13. Films : serveur moviepluto (VOSTFR)       : {films_srv or '(tous, ordre par défaut)'}")
+            print(f"  14. Films : sous-titres VOST (sidecar Plex)   : {films_subs}")
+            print("  15. Optimiser/réparer les .mp4 déjà téléchargés (lecture immédiate dans Plex, son cassé)")
             print("   0. Retour")
             choice = _ask("Choix : ").strip()
             if choice in ("", "0", "q"):
@@ -266,6 +268,14 @@ class Launcher:
                 else:
                     print(f"  {Colors.FAIL}Valeur invalide.{Colors.ENDC}")
             elif choice == "12":
+                print(f"  {Colors.DIM}Clé API TMDB (gratuite) pour chercher les titres VOSTFR (moviepluto) "
+                      f"sans dépendre de nakios.{Colors.ENDC}")
+                print(f"  {Colors.DIM}Création : themoviedb.org → compte → Paramètres → API → clé (v3 auth). "
+                      f"Vide = effacer.{Colors.ENDC}")
+                typed = _ask("Clé TMDB : ").strip()
+                self.set_setting("films_tmdb_key", typed)
+                print(f"  {Colors.OKGREEN}✅ Clé TMDB {'enregistrée' if typed else 'effacée'}.{Colors.ENDC}")
+            elif choice == "13":
                 print(f"  {Colors.DIM}Serveur moviepluto pour le VOSTFR : nom de fruit (BLUEBERRY, APRICOT, "
                       f"AVOCADO…) ou domaine (vidzee, cinemaos…).{Colors.ENDC}")
                 print(f"  {Colors.DIM}Repérez sur moviepluto celui qui joue bien en VOSTFR. "
@@ -273,13 +283,13 @@ class Launcher:
                 typed = _ask("Serveur moviepluto : ").strip()
                 self.set_setting("films_moviepluto_server", typed)
                 print(f"  {Colors.OKGREEN}✅ Serveur moviepluto : {typed or '(tous)'}{Colors.ENDC}")
-            elif choice == "13":
+            elif choice == "14":
                 print(f"  {Colors.DIM}Sous-titres à récupérer en VOST (fichier à côté du .mp4, lu par Plex) : "
                       f"« fr,vo » (défaut), « fr », « vo », « off », ou des codes (ex. fr,en).{Colors.ENDC}")
                 typed = _ask("Sous-titres VOST (Entrée = fr,vo) : ").strip().lower() or "fr,vo"
                 self.set_setting("films_subtitles", typed)
                 print(f"  {Colors.OKGREEN}✅ Sous-titres VOST : {typed}{Colors.ENDC}")
-            elif choice == "14":
+            elif choice == "15":
                 from src.utils.mp4_faststart import fix_folder
                 for category in ("anime", "nba", "films"):
                     if os.path.isdir(self.folder(category)):

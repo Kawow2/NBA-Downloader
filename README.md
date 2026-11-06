@@ -195,7 +195,7 @@ Si le site est derrière Cloudflare, le programme demande le cookie `cf_clearanc
 Films et séries en `.mp4` prêts pour Plex, en **VF** ou en **VOSTFR / VOST**. À chaque lancement, le programme demande la **langue** voulue (menu ou `--lang vf|vostfr`), qui détermine les sources utilisées :
 
 - **VF** — **[nakios.rent](https://nakios.rent)** (**streaming**, API au format TMDB, films **et** séries) **+ zone-telechargement** (**téléchargement direct** 1fichier / Uptobox / Rapidgator… via une **clé [AllDebrid](https://alldebrid.com)**, qualités souvent bien meilleures : **BluRay, 4K, REMUX** ; films seulement). Le téléchargement réutilise tout le moteur de la partie NBA (extracteurs VOE / Uqload / Filemoon / Vidmoly / Sibnet…, yt-dlp, multi-connexions, fusion, faststart).
-- **VOSTFR / VOST** — **[moviepluto](https://moviepluto.cc)** (films **et** séries). moviepluto n'héberge rien : c'est une façade vers une quinzaine de **lecteurs tiers** indexés par **id TMDB** (vidzee, cinemaos, vidup, filmu…), présentés sous des noms de fruits (APPLE, BLUEBERRY…). La recherche réutilise l'API TMDB de nakios pour trouver l'id, puis moviepluto fournit le lecteur. **Les sous-titres FR et VO sont téléchargés en fichiers « sidecar » à côté du `.mp4`** (voir plus bas), activables/désactivables dans Plex.
+- **VOSTFR / VOST** — **[moviepluto](https://moviepluto.cc)** (films **et** séries). moviepluto n'héberge rien : c'est une façade vers une quinzaine de **lecteurs tiers** indexés par **id TMDB** (vidzee, cinemaos, vidup, filmu…), présentés sous des noms de fruits (APPLE, BLUEBERRY…). Pour **chercher par titre**, moviepluto utilise TMDB : soit une **clé TMDB gratuite** (`--tmdb-key`, recommandé, indépendant), soit la session nakios si elle est encore valide ; sinon, **colle directement une URL moviepluto** (l'id TMDB y est). **Les sous-titres FR et VO sont téléchargés en fichiers « sidecar » à côté du `.mp4`** (voir plus bas), activables/désactivables dans Plex.
 
 En VF, une **recherche interroge les deux sites à la fois** : chaque résultat est étiqueté par sa source (`[Nakios]` / `[Zone-Téléchargement]`), et pour le titre choisi la liste des qualités disponibles s'affiche, **meilleure d'abord**. Chaque source reste utilisable seule : sans session Nakios mais avec une clé AllDebrid, seul zone-telechargement est actif, et inversement.
 
@@ -233,6 +233,7 @@ Créez une bibliothèque Plex **Films** (agent « Films ») sur `<dossier>/Films
 | `--subtitles fr,vo` | sous-titres VOST en sidecar : `fr,vo` (défaut), `fr`, `vo`, `off`, ou des codes (ex. `fr,en`). Mémorisé |
 | `--moviepluto-server <serveur>` | lecteur moviepluto à utiliser pour le VOSTFR : nom de fruit (`BLUEBERRY`, `APRICOT`…) ou domaine (`vidzee`, `cinemaos`…). Vide = essayer tous. Mémorisé |
 | `--moviepluto-site <URL>` | si moviepluto change de domaine (mémorisé) |
+| `--tmdb-key "<clé>"` | clé API TMDB (gratuite, [themoviedb.org](https://www.themoviedb.org/settings/api)) pour la recherche VOSTFR moviepluto indépendamment de nakios (mémorisée en local, **jamais commitée**) |
 | `--alldebrid-key "<clé>"` | clé API AllDebrid pour activer zone-telechargement (mémorisée en local, **jamais commitée**) |
 | `--zone-site <URL>` | si zone-telechargement change de domaine (mémorisé) |
 | `--season <N>` | saison(s) d'une série (ex. `1`, `1-3`, `all`) |
@@ -357,7 +358,15 @@ Notes :
 
 ### VOSTFR / VOST via moviepluto
 
-Choisis **VOSTFR / VOST** au lancement (`2` dans le menu, ou `--lang vostfr`) : la source devient **moviepluto**. La recherche et les saisons/épisodes passent par l'API TMDB (comme nakios — la **session Cloudflare est donc utile** pour la recherche ; sinon, colle directement une URL moviepluto, elle contient l'id).
+Choisis **VOSTFR / VOST** au lancement (`2` dans le menu, ou `--lang vostfr`) : la source devient **moviepluto**.
+
+**Chercher par titre (métadonnées TMDB).** moviepluto indexe par id TMDB. Pour chercher/lister saisons et épisodes, trois cas :
+
+1. **Clé TMDB (recommandé, indépendant de nakios)** — crée une clé gratuite sur [themoviedb.org → Paramètres → API](https://www.themoviedb.org/settings/api) (clé « v3 auth »), puis `python main.py films --tmdb-key "TA_CLÉ"` (ou `Réglages → 12`). La recherche VOSTFR marche alors seule, même si nakios est hors service.
+2. **Session nakios encore valide** — si tu l'as déjà, elle sert de repli pour la recherche (aucun navigateur n'est lancé en VOSTFR).
+3. **Sans l'un ni l'autre** — colle directement une **URL moviepluto** (`.../watch/<slug>/<id>`, ou `.../watch/<slug>/<id>/<saison>/<épisode>` pour un épisode précis) : l'id TMDB y est, aucune recherche nécessaire.
+
+> ⚠️ `nakios.rent` change souvent de domaine (ou tombe) : si la recherche échoue avec « host introuvable », la clé TMDB (cas 1) est la solution la plus fiable pour le VOSTFR.
 
 **Choisir le bon lecteur (serveur).** moviepluto renvoie vers une quinzaine de lecteurs ; tous n'ont pas le titre, ni du VOSTFR, ni un flux extractible. Repère celui qui marche :
 

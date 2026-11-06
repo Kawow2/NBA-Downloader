@@ -25,12 +25,15 @@ langue).
 import re
 from urllib.parse import urlparse
 
-from src.var import print_status
+import requests
+
+from src.var import DEFAULT_USER_AGENT, print_status
 from src.utils.config.config import get_setting
-from src.films.site import Media, Source
+from src.films.site import Media, Episode, Source, Site
 from src.nba.site import host_display_name
 
 DEFAULT_SITE_URL = "https://moviepluto.cc"
+TMDB_API = "https://api.themoviedb.org/3"
 
 # Nom de fruit (tel qu'affiché sur moviepluto) -> (base, gabarit film, gabarit
 # série). Les gabarits emploient {base} (terminé par « / »), {id} (TMDB),
@@ -84,16 +87,71 @@ class MoviePluto:
     label = "MoviePluto (VOSTFR)"
     debrid = None
 
-    def __init__(self, site):
-        # `site` est le client « façon TMDB » (src/films/site.Site) déjà
-        # configuré : on s'en sert pour la recherche et les métadonnées.
+    def __init__(self, site=None):
+        # Métadonnées (recherche, saisons, épisodes), dans l'ordre :
+        #   1. TMDB en direct si une clé est configurée (films_tmdb_key) —
+        #      indépendant, recommandé ;
+        #   2. sinon le client « façon TMDB » de nakios (src/films/site.Site),
+        #      s'il est disponible ;
+        #   3. sinon aucune recherche : on colle une URL moviepluto (l'id TMDB
+        #      y est). moviepluto reste jouable sans métadonnées.
         self.site = site
         self.base = (get_setting("films_moviepluto_site_url") or DEFAULT_SITE_URL).rstrip("/")
+        self.tmdb_key = (get_setting("films_tmdb_key") or "").strip() or None
+
+    def metadata_source(self):
+        if self.tmdb_key:
+            return "tmdb"
+        if self.site is not None:
+            return "nakios"
+        return "none"
+
+    # ----------------------------------------------------------------- TMDB
+    def _tmdb(self, path, params=None):
+        p = {"api_key": self.tmdb_key, "language": "fr-FR"}
+        if params:
+            p.update(params)
+        try:
+            r = requests.get(TMDB_API + path, params=p, timeout=20,
+                             headers={"User-Agent": DEFAULT_USER_AGENT})
+        except requests.RequestException as e:
+            print_status(f"TMDB injoignable : {str(e)[:100]}", "error")
+            return None
+        if r.status_code == 401:
+            print_status("Clé TMDB refusée (401). Vérifie films_tmdb_key / --tmdb-key.", "error")
+            return None
+        if r.status_code >= 400:
+            return None
+        try:
+            return r.json()
+        except ValueError:
+            return None
 
     # ---------------------------------------------------- recherche / métadonnées
     def search(self, query, kind=None):
-        # Même API que nakios (TMDB) : on récupère l'id TMDB, qui est aussi
-        # celui qu'attendent les lecteurs de moviepluto.
+        # L'id renvoyé est un id TMDB, celui qu'attendent les lecteurs moviepluto.
+        if self.tmdb_key:
+            data = self._tmdb("/search/multi", {"query": query, "page": 1})
+            results = (data or {}).get("results") or []
+            out = []
+            limit = 40 if kind else 20
+            for item in results:
+                if not isinstance(item, dict) or item.get("media_type") not in ("movie", "tv"):
+                    continue
+                if not item.get("id"):
+                    continue
+                m = Media(item)
+                if kind and m.media_type != kind:
+                    continue
+                m.provider = self
+                out.append(m)
+                if len(out) >= limit:
+                    break
+            return out
+        if self.site is None:
+            print_status("Recherche moviepluto indisponible (ni clé TMDB, ni session nakios). "
+                         "Colle une URL moviepluto, ou configure une clé TMDB (--tmdb-key).", "warning")
+            return []
         res = self.site.search(query, limit=40 if kind else 20)
         if kind:
             res = [m for m in res if m.media_type == kind]
@@ -102,9 +160,39 @@ class MoviePluto:
         return res
 
     def details(self, media):
+        if self.tmdb_key:
+            path = f"/tv/{media.id}" if media.is_series else f"/movie/{media.id}"
+            data = self._tmdb(path)
+            if data:
+                merged = Media(data, media_type=media.media_type)
+                if merged.title in ("?", None):
+                    merged.title = media.title
+                merged.year = merged.year or media.year
+                for attr in ("pinned_season", "pinned_episode"):
+                    if hasattr(media, attr):
+                        setattr(merged, attr, getattr(media, attr))
+                seasons = Site._seasons_from(data) if merged.is_series else []
+                return merged, seasons
+            # TMDB n'a pas répondu : on garde ce qu'on a (titre du slug…).
+            return media, []
+        if self.site is None:
+            return media, []
         return self.site.details(media)
 
     def episodes(self, media, season):
+        if self.tmdb_key:
+            data = self._tmdb(f"/tv/{media.id}/season/{season}")
+            raw = (data or {}).get("episodes") or []
+            eps = []
+            for e in raw:
+                num = e.get("episode_number")
+                if num is None:
+                    continue
+                eps.append(Episode(season, int(num), e.get("name") or e.get("title")))
+            eps.sort(key=lambda e: e.number)
+            return eps
+        if self.site is None:
+            return []
         return self.site.episodes(media, season)
 
     # ---------------------------------------------------------------- lecteurs
