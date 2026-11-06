@@ -4,7 +4,7 @@ Un seul programme, un menu au démarrage :
 
 - **🎌 Anime** : le téléchargeur Anime-Sama / Nakanime de [SertraFurr/anime-sama-nakanime-downloader](https://github.com/SertraFurr/anime-sama-nakanime-downloader) (documentation plus bas), avec en plus des **téléchargements en parallèle** ;
 - **🏀 NBA** : les replays de [basketball-video.com](https://basketball-video.com) en **.mp4** rangés et nommés pour Plex ;
-- **🎬 Films & Séries** : films et séries de [nakios.rent](https://nakios.rent) (streaming) **et** de zone-telechargement (téléchargement direct via un débrideur, pour la 4K / BluRay / REMUX) en **.mp4**, rangés en bibliothèques Plex **Films** et **Séries**. Une seule recherche interroge **les deux sites** et propose toutes les qualités trouvées.
+- **🎬 Films & Séries** : films et séries en **.mp4**, rangés en bibliothèques Plex **Films** et **Séries**, au choix en **VF** ([nakios.rent](https://nakios.rent) streaming **+** zone-telechargement en direct via débrideur pour la 4K / BluRay / REMUX) ou en **VOSTFR / VOST** ([moviepluto](https://moviepluto.cc), avec **sous-titres FR + VO** en sidecar lus par Plex). Le programme demande la langue, puis une recherche trouve le titre et propose les qualités / lecteurs.
 
 Chaque catégorie a **son propre dossier** (sa bibliothèque Plex), demandé la première fois qu'on l'utilise et modifiable dans **Réglages**.
 
@@ -14,8 +14,8 @@ Chaque catégorie a **son propre dossier** (sa bibliothèque Plex), demandé la 
 ╚══════════════════════════════════════════════════════════════╝
   1. 🎌 Anime           (anime-sama, nakanime)        → /srv/plex/Anime
   2. 🏀 NBA             (basketball-video.com)        → /srv/plex/Sports/NBA
-  3. 🎬 Films           (nakios, zone-telechargement) → /srv/plex/Films
-  4. 📺 Séries          (nakios.rent)                 → /srv/plex/Séries
+  3. 🎬 Films           (VF : nakios, zone · VOSTFR : moviepluto) → /srv/plex/Films
+  4. 📺 Séries          (VF : nakios · VOSTFR : moviepluto)       → /srv/plex/Séries
   5. ⚙️  Réglages (dossiers, parallélisme, qualité)
   q. Quitter
 ```
@@ -86,6 +86,8 @@ Tout est mémorisé dans `src/utils/config/config.json`. Le réglage `11` optimi
 Chaque `.mp4` téléchargé (anime, NBA et films/séries) a son index au **début** du fichier : Plex démarre la lecture tout de suite au lieu de parcourir tout le fichier. Les fichiers qui ne l'ont pas sont réécrits automatiquement à la fin du téléchargement (copie sans ré-encodage, quelques secondes à une minute selon le disque). Pour les fichiers téléchargés avant cette version : `python main.py --faststart "/mnt/plexmedia/Vidéos"` (ou `4. Réglages` → `11`).
 
 La même commande **répare le son** des épisodes anime convertis par les versions précédentes (son muet ou qui grésille) : la conversion `.ts` → `.mp4` y enregistrait une fréquence audio fausse (48000 Hz au lieu de 44100 Hz, par ex.). La vraie fréquence est retrouvée d'après la durée, et les données audio sont gardées telles quelles, sans ré-encodage.
+
+Elle **retague aussi le HEVC `hev1` → `hvc1`** (sans ré-encodage) : beaucoup de flux VOSTFR (moviepluto) sont en HEVC taggé `hev1`, que certains clients Plex (navigateur, Apple, TV) lisent mal — **image ou son absents**. Le retag corrige ça et il est appliqué automatiquement aux téléchargements moviepluto. Pour un fichier déjà pris : `4. Réglages → 16` (ou `python main.py --faststart "<dossier>"`).
 
 ## Serveur Plex sur un portable Linux
 
@@ -192,16 +194,17 @@ Si le site est derrière Cloudflare, le programme demande le cookie `cf_clearanc
 
 # 🎬 Films & Séries
 
-Films et séries depuis **deux sources complémentaires**, en `.mp4` prêts pour Plex :
+Films et séries en `.mp4` prêts pour Plex, en **VF** ou en **VOSTFR / VOST**. À chaque lancement, le programme demande la **langue** voulue (menu ou `--lang vf|vostfr`), qui détermine les sources utilisées :
 
-- **[nakios.rent](https://nakios.rent)** — **streaming** (API au format TMDB). Films **et** séries. Le téléchargement réutilise tout le moteur de la partie NBA (extracteurs VOE / Uqload / Filemoon / Vidmoly / Sibnet…, yt-dlp, multi-connexions, fusion, faststart).
-- **zone-telechargement** — **téléchargement direct** (liens 1fichier / Uptobox / Rapidgator… protégés par dl-protect). Qualités souvent bien meilleures (**BluRay, 4K, REMUX**). Nécessite une **clé [AllDebrid](https://alldebrid.com)** qui transforme les liens protégés en liens directs pleine vitesse. Films seulement pour l'instant.
+- **VF** — **[nakios.rent](https://nakios.rent)** (**streaming**, API au format TMDB, films **et** séries) **+ zone-telechargement** (**téléchargement direct** 1fichier / Uptobox / Rapidgator… via une **clé [AllDebrid](https://alldebrid.com)**, qualités souvent bien meilleures : **BluRay, 4K, REMUX** ; films seulement). Le téléchargement réutilise tout le moteur de la partie NBA (extracteurs VOE / Uqload / Filemoon / Vidmoly / Sibnet…, yt-dlp, multi-connexions, fusion, faststart).
+- **VOSTFR / VOST** — **[moviepluto](https://moviepluto.cc)** (films **et** séries). moviepluto n'héberge rien : c'est une façade vers une quinzaine de **lecteurs tiers** indexés par **id TMDB** (vidzee, cinemaos, vidup, filmu…), présentés sous des noms de fruits (APPLE, BLUEBERRY…). Pour **chercher par titre**, moviepluto utilise TMDB : soit une **clé TMDB gratuite** (`--tmdb-key`, recommandé, indépendant), soit la session nakios si elle est encore valide ; sinon, **colle directement une URL moviepluto** (l'id TMDB y est). **Les sous-titres FR et VO sont téléchargés en fichiers « sidecar » à côté du `.mp4`** (voir plus bas), activables/désactivables dans Plex.
 
-Une **recherche interroge les deux sites à la fois** : chaque résultat est étiqueté par sa source (`[Nakios]` / `[Zone-Téléchargement]`), et pour le titre choisi la liste des qualités disponibles s'affiche, **meilleure d'abord**. Chaque source reste utilisable seule : sans session Nakios mais avec une clé AllDebrid, seul zone-telechargement est actif, et inversement.
+En VF, une **recherche interroge les deux sites à la fois** : chaque résultat est étiqueté par sa source (`[Nakios]` / `[Zone-Téléchargement]`), et pour le titre choisi la liste des qualités disponibles s'affiche, **meilleure d'abord**. Chaque source reste utilisable seule : sans session Nakios mais avec une clé AllDebrid, seul zone-telechargement est actif, et inversement.
 
 ## Déroulement
 
-1. **Menu principal** : choisis **3 = Films** ou **4 = Séries** — la recherche est alors déjà filtrée sur ce type (bandeau « Filtre : … uniquement »). Puis `1` = rechercher par titre, ou colle directement une URL `nakios.rent` (`.../series/<id>`, `.../film/<id>`) ou zone-telechargement (`.../?p=film&id=<id>-<slug>`). (`python main.py films` sans le menu cherche les deux types ; `--kind film|serie` force un type.)
+1. **Menu principal** : choisis **3 = Films** ou **4 = Séries** — la recherche est alors déjà filtrée sur ce type (bandeau « Filtre : … uniquement »).
+2. **Langue** : `1 = VF` (nakios / zone) ou `2 = VOSTFR / VOST` (moviepluto). Demandé une fois par session (sautée si `--lang` est passé ou si une langue par défaut est fixée dans les Réglages). Puis `1` = rechercher par titre, ou colle directement une URL : moviepluto (`.../watch/<slug>/<id>[/<saison>/<épisode>]`), `nakios.rent` (`.../series/<id>`, `.../film/<id>`) ou zone-telechargement (`.../?p=film&id=<id>-<slug>`). (`python main.py films` sans le menu cherche les deux types ; `--kind film|serie` force un type.)
 2. **Résultat** : les résultats sont **regroupés par source** (un en-tête par site, ~**10 par source**, soit jusqu'à 20 au total avec les deux), chaque ligne indiquant **Film** ou **Série** et l'année. Choisir le numéro (la numérotation est globale, 1..N).
 3. **Série** : choisir la/les **saison(s)** (ex. `1`, `1-3`, Entrée = toutes), puis les **épisodes** (ex. `1-5`, `1,3,5`, Entrée = tous).
 4. **Chemin** : Entrée = dossier Films & Séries, ou un autre chemin.
@@ -227,7 +230,13 @@ Créez une bibliothèque Plex **Films** (agent « Films ») sur `<dossier>/Films
 | --- | --- |
 | `--search "<titre>"` | recherche directe |
 | `--kind film\|serie` | limite la recherche aux films ou aux séries (défaut : les deux) |
-| `--url <URL>` | film / série directement (nakios `.../series/<id>`, `.../film/<id>` ou zone `.../?p=film&id=<id>-<slug>`) |
+| `--lang vf\|vostfr` | langue : **VF** (nakios / zone) ou **VOSTFR / VOST** (moviepluto). Défaut : demandé (ou le réglage « langue par défaut ») |
+| `--url <URL>` | film / série directement (moviepluto `.../watch/<slug>/<id>[/<saison>/<épisode>]`, nakios `.../series/<id>`, `.../film/<id>` ou zone `.../?p=film&id=<id>-<slug>`) |
+| `--subtitles fr,vo` | sous-titres VOST en sidecar : `fr,vo` (défaut), `fr`, `vo`, `off`, ou des codes (ex. `fr,en`). Mémorisé |
+| `--sub-fps 25` | recale les sous-titres VOST qui **dérivent** (synchro au début puis décalage qui grandit) : fréquence d'origine des sous-titres, en général `25` (PAL). Vide = aucun recalage. Mémorisé |
+| `--moviepluto-server <serveur>` | lecteur moviepluto à utiliser pour le VOSTFR : nom de fruit (`BLUEBERRY`, `APRICOT`…) ou domaine (`vidzee`, `cinemaos`…). Vide = **Vidnest (défaut)**, `all` = tous les essayer. Mémorisé |
+| `--moviepluto-site <URL>` | si moviepluto change de domaine (mémorisé) |
+| `--tmdb-key "<clé>"` | clé API TMDB (gratuite, [themoviedb.org](https://www.themoviedb.org/settings/api)) pour la recherche VOSTFR moviepluto indépendamment de nakios (mémorisée en local, **jamais commitée**) |
 | `--alldebrid-key "<clé>"` | clé API AllDebrid pour activer zone-telechargement (mémorisée en local, **jamais commitée**) |
 | `--zone-site <URL>` | si zone-telechargement change de domaine (mémorisé) |
 | `--season <N>` | saison(s) d'une série (ex. `1`, `1-3`, `all`) |
@@ -349,6 +358,48 @@ Notes :
 - Le **plafond `--quality`** ne s'applique pas à ces fichiers : on récupère exactement la version choisie (donc choisis la qualité dans la liste). En mode non-interactif, c'est la meilleure qui est prise.
 - Si un fichier est une **archive multi-parties** (`.rar`, `.001`…), il est récupéré tel quel : la décompression automatique n'est pas encore gérée.
 - `--zone-site <URL>` si le domaine du site change.
+
+### VOSTFR / VOST via moviepluto
+
+Choisis **VOSTFR / VOST** au lancement (`2` dans le menu, ou `--lang vostfr`) : la source devient **moviepluto**.
+
+**Chercher par titre (métadonnées TMDB).** moviepluto indexe par id TMDB. Pour chercher/lister saisons et épisodes, trois cas :
+
+1. **Clé TMDB (recommandé, indépendant de nakios)** — crée une clé gratuite sur [themoviedb.org → Paramètres → API](https://www.themoviedb.org/settings/api) (clé « v3 auth »), puis `python main.py films --tmdb-key "TA_CLÉ"` (ou `Réglages → 12`). La recherche VOSTFR marche alors seule, même si nakios est hors service.
+2. **Session nakios encore valide** — si tu l'as déjà, elle sert de repli pour la recherche (aucun navigateur n'est lancé en VOSTFR).
+3. **Sans l'un ni l'autre** — colle directement une **URL moviepluto** (`.../watch/<slug>/<id>`, ou `.../watch/<slug>/<id>/<saison>/<épisode>` pour un épisode précis) : l'id TMDB y est, aucune recherche nécessaire.
+
+> ⚠️ `nakios.rent` change souvent de domaine (ou tombe) : si la recherche échoue avec « host introuvable », la clé TMDB (cas 1) est la solution la plus fiable pour le VOSTFR.
+
+**Choisir le bon lecteur (serveur).** moviepluto renvoie vers une quinzaine de lecteurs ; tous n'ont pas le titre, ni du VOSTFR, ni un flux extractible. Repère celui qui marche :
+
+1. Ouvre le titre sur [moviepluto.cc](https://moviepluto.cc) et lance la lecture.
+2. Essaie les **serveurs** (noms de fruits) jusqu'à en trouver un qui joue bien **en VOSTFR**.
+3. Fige-le : `4. Réglages → 13` (ou `--moviepluto-server`), par **nom de fruit** (`BLUEBERRY`, `APRICOT`, `AVOCADO`…) ou par **domaine** (`vidzee`, `cinemaos`, `vidup`…). Correspondances : APPLE→videasy, APRICOT→cinemaos, BANANA→filmu, BLUEBERRY→vidzee, PLUM→vidnest, AVOCADO→vidup.
+
+Par défaut (aucun réglage), c'est **Vidnest** qui est utilisé — **un seul lecteur, donc pas d'étape de choix**. Mets `all` pour essayer les 14 serveurs dans l'ordre (utile si Vidnest n'a pas un titre).
+
+Pour cibler le lecteur au plus juste, tu peux aussi copier, dans `F12 → Réseau`, l'URL du lecteur (iframe) ou du flux `.m3u8` pendant la lecture.
+
+**Comment l'extraction marche (important).** Ces lecteurs sont des players JavaScript obfusqués : yt-dlp ne sait pas les lire (`Unsupported URL`). Le programme ouvre donc chaque lecteur dans un **vrai navigateur ([Playwright](https://playwright.dev), déjà requis)**, le laisse démarrer, et **capture le flux `.m3u8` (et les pistes de sous-titres)** qui passent sur le réseau, puis télécharge ce flux. Conséquences :
+
+- **Playwright doit être installé** (le programme le propose au besoin) : `pip install playwright && playwright install chromium`.
+- Si un lecteur ne démarre pas en mode invisible, relance avec **`--browser-visible`** (fenêtre visible, passe mieux les protections).
+- **DNS** : si tu vois `Failed to resolve 'vidlink.pro'` / `'player.vidlove.cc'`, ton DNS/FAI bloque ces domaines. Passe ton DNS sur **1.1.1.1** (Cloudflare) ou **8.8.8.8** (Google) pour débloquer ces lecteurs — sinon ils échoueront aussi dans ton propre navigateur.
+- Épingle le lecteur qui marche (`Réglages → 13`) pour éviter d'essayer les 14 à chaque fois.
+
+**Sous-titres (sidecar Plex).** Par défaut, le **français** et la **VO** (langue originale, souvent l'anglais) sont téléchargés en fichiers à côté de la vidéo :
+
+```
+Films/Inception (2010)/Inception (2010).fr.srt
+Films/Inception (2010)/Inception (2010).en.srt
+```
+
+Plex (comme Jellyfin / Kodi) les détecte automatiquement et les propose comme pistes **activables/désactivables** dans le lecteur. Les `.vtt` sont convertis en `.srt`. Règle ça avec `--subtitles` ou `4. Réglages → 14` : `fr,vo` (défaut), `fr`, `vo`, `off`, ou des codes séparés par virgule (ex. `fr,en`). La récupération des sous-titres est **best-effort** : elle dépend du lecteur (certains n'en exposent pas).
+
+**Sous-titres qui dérivent (synchro au début, décalage qui grandit).** C'est une désynchro de **fréquence d'images** : les sous-titres viennent d'une source 25 fps (PAL) alors que la vidéo est en 23,976 fps. Le « décalage » de Plex ne corrige qu'un offset fixe, pas une dérive. Utilise **`--sub-fps 25`** (ou `4. Réglages → 15`) : les temps sont réétirés sur la vraie fréquence de la vidéo. Pour un épisode déjà pris avec des sous-titres décalés, supprime-le et retélécharge-le une fois `--sub-fps 25` réglé.
+
+> moviepluto, comme nakios, est une façade vers des lecteurs tiers qui changent souvent : si un serveur cesse de fonctionner, essaies-en un autre et fige-le.
 
 ### Si « aucun lecteur trouvé »
 

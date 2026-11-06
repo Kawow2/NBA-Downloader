@@ -135,9 +135,49 @@ def ensure_faststart(path, quiet=False):
     return False
 
 
+def _video_codec_tag(path):
+    """(codec, codec_tag) de la 1re piste vidéo, ex. ('hevc', 'hev1'), ou
+    (None, None)."""
+    try:
+        out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                              "stream=codec_name,codec_tag_string", "-of", "default=nokey=1:noprint_wrappers=1",
+                              path], capture_output=True, text=True, timeout=60).stdout.split()
+    except (OSError, subprocess.TimeoutExpired):
+        return None, None
+    return (out[0] if out else None), (out[1] if len(out) > 1 else None)
+
+
+def ensure_hvc1(path, quiet=False):
+    """HEVC taggé `hev1` → `hvc1`, sans ré-encodage : beaucoup de clients Plex
+    (navigateur, Apple, TV) gèrent mal `hev1` (image ou SON absents). Le son et
+    l'image sont recopiés tels quels. True si le fichier a été réécrit."""
+    if not path or not path.lower().endswith((".mp4", ".m4v", ".mov")) or not os.path.isfile(path):
+        return False
+    if not shutil.which("ffmpeg"):
+        return False
+    codec, tag = _video_codec_tag(path)
+    if codec != "hevc" or (tag or "").lower() == "hvc1":
+        return False  # pas du HEVC, ou déjà hvc1
+    tmp = path + ".hvc1.part"
+    if not quiet:
+        print_status(f"HEVC {tag or '?'}→hvc1 (compatibilité Plex, sans ré-encodage) : "
+                     f"{os.path.basename(path)}", "loading")
+    sound = _audio_signature(path)
+    ok = run_ffmpeg(["-i", path, "-map", "0", "-c", "copy", "-tag:v", "hvc1", "-ignore_unknown",
+                     "-movflags", "+faststart", "-f", "mp4", tmp], "🔧 hev1→hvc1", media_duration(path))
+    if ok and os.path.exists(tmp) and os.path.getsize(tmp) > 0 and _audio_signature(tmp) == sound:
+        os.replace(tmp, path)
+        return True
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+    return False
+
+
 def fix_folder(folder):
-    """Rewrite every .mp4 under folder that isn't faststart or whose sound
-    is described wrongly."""
+    """Rewrite every .mp4 under folder that isn't faststart, whose sound is
+    described wrongly, or whose HEVC is tagged hev1 (Plex compat)."""
     if not shutil.which("ffmpeg"):
         print_status("ffmpeg est nécessaire pour optimiser les fichiers.", "error")
         return 0
@@ -146,7 +186,9 @@ def fix_folder(folder):
         for name in sorted(files):
             if name.lower().endswith((".mp4", ".m4v")):
                 checked += 1
-                if ensure_faststart(os.path.join(root, name)):
+                changed = ensure_faststart(os.path.join(root, name))
+                changed = ensure_hvc1(os.path.join(root, name)) or changed
+                if changed:
                     fixed += 1
     print_status(f"{folder} : {checked} fichier(s) .mp4 vérifié(s), {fixed} optimisé(s) ou réparé(s).", "success")
     return fixed
