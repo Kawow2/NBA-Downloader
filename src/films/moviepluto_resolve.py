@@ -131,13 +131,15 @@ class MoviePlutoResolver:
         page.on("response", on_response)
         # Certains lecteurs bloquent les requêtes "media" si on coupe trop ;
         # on laisse tout charger, on observe seulement.
+        nav_ok = True
         try:
             page.goto(embed_url, referer=referer, wait_until="domcontentloaded",
                       timeout=min(timeout, 30) * 1000)
         except Exception:
-            pass  # on garde ce qui a déjà été capté
+            nav_ok = False  # domaine mort/bloqué : on n'attend pas 45 s pour rien
 
-        deadline = time.time() + timeout
+        # Si la page n'a pas chargé (DNS bloqué, hôte mort…), on abrège.
+        deadline = time.time() + (timeout if nav_ok else 8)
         clicked = False
         while time.time() < deadline:
             if streams:
