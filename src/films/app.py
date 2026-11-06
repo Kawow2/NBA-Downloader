@@ -679,6 +679,10 @@ def _download_resolved(provider, media, out_path, ordered, season, episode):
             if info.get("subtitles"):
                 src.subtitles = info["subtitles"]
             stream, ref = info["stream"], info.get("referer") or getattr(src, "page_referer", None)
+            # Pour les sous-titres : viser le flux capté (.mpd/.m3u8 embarque
+            # souvent les pistes texte) plutôt que la page du lecteur.
+            src.resolved_stream = stream
+            src.resolved_referer = ref
             print_status(f"Flux capté : {stream[:90]}…", "success")
             if download_part(stream, out_path, page_url=ref):
                 _maybe_subtitles(provider, src, out_path, media, season, episode)

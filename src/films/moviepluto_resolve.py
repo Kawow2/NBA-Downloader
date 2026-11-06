@@ -22,6 +22,10 @@ DEFAULT_REFERER = "https://moviepluto.cc/"
 _STREAM_RE = re.compile(r"\.(m3u8|mpd)(\?|$)", re.I)
 _MP4_RE = re.compile(r"\.mp4(\?|$)", re.I)
 _SUB_RE = re.compile(r"\.(vtt|srt)(\?|$)", re.I)
+# Sous-titres servis sans extension .vtt/.srt (proxy, API) : repérés par un
+# indice dans l'URL ou par le type MIME de la réponse.
+_SUB_HINT = re.compile(r"(subtitle|/subs?[/.]|caption|[?&](lang|sub|srt|vtt)=)", re.I)
+_SUB_CT = ("text/vtt", "application/x-subrip", "text/srt", "application/ttml", "text/vtt;")
 
 # Bruit à ignorer (pubs, trackers, miniatures…).
 _NOISE = ("google", "doubleclick", "facebook", "analytics", "sentry", "cloudflareinsights",
@@ -120,8 +124,15 @@ class MoviePlutoResolver:
                     streams.append((url, dict(resp.request.headers)))
                 elif _MP4_RE.search(url):
                     mp4s.append((url, dict(resp.request.headers)))
-                elif _SUB_RE.search(url):
-                    subs.append(url)
+                else:
+                    ct = ""
+                    try:
+                        ct = (resp.headers.get("content-type") or "").lower()
+                    except Exception:
+                        pass
+                    if _SUB_RE.search(url) or _SUB_HINT.search(url) or any(c in ct for c in _SUB_CT):
+                        if url not in subs:
+                            subs.append(url)
             except Exception:
                 pass
 

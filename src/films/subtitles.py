@@ -247,11 +247,14 @@ def download_for(source, video_out_path, media=None, season=None, episode=None):
             if isinstance(sub, dict) and (_matches(code, sub.get("lang"), sub.get("label"))) and sub.get("url"):
                 url = sub["url"]
                 break
-        # 2) via yt-dlp.
+        # 2) via yt-dlp — de préférence sur le flux capté (.mpd/.m3u8 embarque
+        #    souvent les pistes texte), sinon sur l'URL du lecteur.
         if not url:
             if ytdlp_subs is None:
+                probe_url = getattr(source, "resolved_stream", None) or getattr(source, "url", None)
+                probe_ref = getattr(source, "resolved_referer", None) or referer
                 try:
-                    ytdlp_subs = _ytdlp_subtitles(getattr(source, "url", None), referer)
+                    ytdlp_subs = _ytdlp_subtitles(probe_url, probe_ref)
                 except Exception:
                     ytdlp_subs = {}
             url = _pick_track(ytdlp_subs, code)
