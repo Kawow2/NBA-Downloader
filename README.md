@@ -233,7 +233,7 @@ Créez une bibliothèque Plex **Films** (agent « Films ») sur `<dossier>/Films
 | `--lang vf\|vostfr` | langue : **VF** (nakios / zone) ou **VOSTFR / VOST** (moviepluto). Défaut : demandé (ou le réglage « langue par défaut ») |
 | `--url <URL>` | film / série directement (moviepluto `.../watch/<slug>/<id>[/<saison>/<épisode>]`, nakios `.../series/<id>`, `.../film/<id>` ou zone `.../?p=film&id=<id>-<slug>`) |
 | `--subtitles fr,vo` | sous-titres VOST en sidecar : `fr,vo` (défaut), `fr`, `vo`, `off`, ou des codes (ex. `fr,en`). Mémorisé |
-| `--moviepluto-server <serveur>` | lecteur moviepluto à utiliser pour le VOSTFR : nom de fruit (`BLUEBERRY`, `APRICOT`…) ou domaine (`vidzee`, `cinemaos`…). Vide = essayer tous. Mémorisé |
+| `--moviepluto-server <serveur>` | lecteur moviepluto à utiliser pour le VOSTFR : nom de fruit (`BLUEBERRY`, `APRICOT`…) ou domaine (`vidzee`, `cinemaos`…). Vide = **Vidnest (défaut)**, `all` = tous les essayer. Mémorisé |
 | `--moviepluto-site <URL>` | si moviepluto change de domaine (mémorisé) |
 | `--tmdb-key "<clé>"` | clé API TMDB (gratuite, [themoviedb.org](https://www.themoviedb.org/settings/api)) pour la recherche VOSTFR moviepluto indépendamment de nakios (mémorisée en local, **jamais commitée**) |
 | `--alldebrid-key "<clé>"` | clé API AllDebrid pour activer zone-telechargement (mémorisée en local, **jamais commitée**) |
@@ -374,7 +374,9 @@ Choisis **VOSTFR / VOST** au lancement (`2` dans le menu, ou `--lang vostfr`) : 
 
 1. Ouvre le titre sur [moviepluto.cc](https://moviepluto.cc) et lance la lecture.
 2. Essaie les **serveurs** (noms de fruits) jusqu'à en trouver un qui joue bien **en VOSTFR**.
-3. Fige-le : `4. Réglages → 12` (ou `--moviepluto-server`), par **nom de fruit** (`BLUEBERRY`, `APRICOT`, `AVOCADO`…) ou par **domaine** (`vidzee`, `cinemaos`, `vidup`…). Correspondances : APPLE→videasy, APRICOT→cinemaos, BANANA→filmu, BLUEBERRY→vidzee, PLUM→vidnest, AVOCADO→vidup. Vide = tous les serveurs sont essayés dans l'ordre (sans garantie de langue).
+3. Fige-le : `4. Réglages → 13` (ou `--moviepluto-server`), par **nom de fruit** (`BLUEBERRY`, `APRICOT`, `AVOCADO`…) ou par **domaine** (`vidzee`, `cinemaos`, `vidup`…). Correspondances : APPLE→videasy, APRICOT→cinemaos, BANANA→filmu, BLUEBERRY→vidzee, PLUM→vidnest, AVOCADO→vidup.
+
+Par défaut (aucun réglage), c'est **Vidnest** qui est utilisé — **un seul lecteur, donc pas d'étape de choix**. Mets `all` pour essayer les 14 serveurs dans l'ordre (utile si Vidnest n'a pas un titre).
 
 Pour cibler le lecteur au plus juste, tu peux aussi copier, dans `F12 → Réseau`, l'URL du lecteur (iframe) ou du flux `.m3u8` pendant la lecture.
 

@@ -1114,7 +1114,7 @@ def main():
         subs_label = subs.subtitles_setting()
         reche = "TMDB (clé)" if get_setting("films_tmdb_key") else "nakios (si session) / URL collée"
         print(f"  {Colors.DIM}Langue : VOSTFR / VOST (moviepluto) · recherche : {reche}{Colors.ENDC}")
-        print(f"  {Colors.DIM}Serveur moviepluto : {srv or '(tous, ordre par défaut)'} · "
+        print(f"  {Colors.DIM}Serveur moviepluto : {srv or 'vidnest (défaut)'} · "
               f"sous-titres : {'aucun' if not subs.subtitles_enabled() else subs_label}{Colors.ENDC}")
     elif _lang_pref == "all":
         print(f"  {Colors.DIM}Langue : VF + VOSTFR (toutes sources){Colors.ENDC}")

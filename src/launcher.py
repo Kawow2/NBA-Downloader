@@ -212,7 +212,7 @@ class Launcher:
             print(f"  11. Films : langue par défaut (VF / VOSTFR)   : "
                   f"{(films_lang or '').upper() or '(demandé à chaque fois)'}")
             print(f"  12. Films : clé TMDB (recherche VOSTFR)       : {films_tmdb}")
-            print(f"  13. Films : serveur moviepluto (VOSTFR)       : {films_srv or '(tous, ordre par défaut)'}")
+            print(f"  13. Films : serveur moviepluto (VOSTFR)       : {films_srv or 'vidnest (défaut)'}")
             print(f"  14. Films : sous-titres VOST (sidecar Plex)   : {films_subs}")
             print("  15. Optimiser/réparer les .mp4 déjà téléchargés (lecture immédiate dans Plex, son cassé)")
             print("   0. Retour")
@@ -279,10 +279,10 @@ class Launcher:
                 print(f"  {Colors.DIM}Serveur moviepluto pour le VOSTFR : nom de fruit (BLUEBERRY, APRICOT, "
                       f"AVOCADO…) ou domaine (vidzee, cinemaos…).{Colors.ENDC}")
                 print(f"  {Colors.DIM}Repérez sur moviepluto celui qui joue bien en VOSTFR. "
-                      f"Vide = essayer tous les serveurs.{Colors.ENDC}")
+                      f"Vide = vidnest (défaut) ; « all » = essayer tous les serveurs.{Colors.ENDC}")
                 typed = _ask("Serveur moviepluto : ").strip()
                 self.set_setting("films_moviepluto_server", typed)
-                print(f"  {Colors.OKGREEN}✅ Serveur moviepluto : {typed or '(tous)'}{Colors.ENDC}")
+                print(f"  {Colors.OKGREEN}✅ Serveur moviepluto : {typed or 'vidnest (défaut)'}{Colors.ENDC}")
             elif choice == "14":
                 print(f"  {Colors.DIM}Sous-titres à récupérer en VOST (fichier à côté du .mp4, lu par Plex) : "
                       f"« fr,vo » (défaut), « fr », « vo », « off », ou des codes (ex. fr,en).{Colors.ENDC}")

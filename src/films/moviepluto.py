@@ -57,10 +57,14 @@ SERVERS = {
     "PASSION":    ("https://vidbolt.pro/",           "{base}movie/{id}",        "{base}tv/{id}/{season}/{episode}"),
 }
 
-# Ordre d'essai quand aucun serveur n'est figé dans les réglages.
+# Ordre d'essai quand on demande explicitement « tous » les serveurs.
 DEFAULT_ORDER = ["BLUEBERRY", "APRICOT", "AVOCADO", "BANANA", "APPLE", "PLUM",
                  "PINEBERRY", "CHERRY", "LIME", "CANTALOUPE", "TANGERINE",
                  "PEAR", "GRAPE", "PASSION"]
+
+# Serveur utilisé par défaut (aucun réglage) : un seul lecteur = pas d'étape de
+# choix. Vidnest (PLUM) renvoie un flux .m3u8/.mpd bien captable.
+DEFAULT_SERVER = "vidnest"
 
 # /watch/<slug>/<id>                      -> film
 # /watch/<slug>/<id>/<season>/<episode>   -> série (saison/épisode optionnels)
@@ -209,11 +213,16 @@ class MoviePluto:
 
     def _servers_to_try(self):
         pref = (get_setting("films_moviepluto_server") or "").strip()
-        if pref:
-            name = self._match_server(pref)
-            if name:
-                return [(name,) + SERVERS[name]]
-            print_status(f"Serveur moviepluto « {pref} » inconnu : j'essaie tous les serveurs.", "warning")
+        # « all » / « tous » : on essaie tous les serveurs dans l'ordre.
+        if pref.lower() in ("all", "tous", "tout", "*"):
+            return [(name,) + SERVERS[name] for name in DEFAULT_ORDER if name in SERVERS]
+        # Aucun réglage : Vidnest par défaut (un seul lecteur, pas d'étape).
+        if not pref:
+            pref = DEFAULT_SERVER
+        name = self._match_server(pref)
+        if name:
+            return [(name,) + SERVERS[name]]
+        print_status(f"Serveur moviepluto « {pref} » inconnu : j'essaie tous les serveurs.", "warning")
         return [(name,) + SERVERS[name] for name in DEFAULT_ORDER if name in SERVERS]
 
     def sources(self, media, season=None, episode=None):
