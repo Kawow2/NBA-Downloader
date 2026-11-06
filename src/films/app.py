@@ -29,7 +29,7 @@ from src.var import Colors, DEFAULT_USER_AGENT, print_status, print_separator
 from src.utils.config.config import get_setting, set_setting
 from src.utils.check.check_ffmpeg_installed import check_ffmpeg_installed
 from src.utils.check.check_folder import folder_problem
-from src.utils.mp4_faststart import ensure_faststart
+from src.utils.mp4_faststart import ensure_faststart, ensure_hvc1
 from src.films.site import Site, parse_media_url
 from src.films import plex
 from src.films import subtitles as subs
@@ -685,6 +685,13 @@ def _download_resolved(provider, media, out_path, ordered, season, episode):
             src.resolved_referer = ref
             print_status(f"Flux capté : {stream[:90]}…", "success")
             if download_part(stream, out_path, page_url=ref):
+                # Beaucoup de flux moviepluto sont en HEVC taggé hev1 : on
+                # retague en hvc1 (sans ré-encodage) pour que Plex lise image
+                # ET son correctement.
+                try:
+                    ensure_hvc1(out_path)
+                except Exception:
+                    pass
                 _maybe_subtitles(provider, src, out_path, media, season, episode)
                 print_status(f"Enregistré : {out_path}", "success")
                 return True

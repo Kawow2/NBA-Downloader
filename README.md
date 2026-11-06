@@ -87,6 +87,8 @@ Chaque `.mp4` téléchargé (anime, NBA et films/séries) a son index au **débu
 
 La même commande **répare le son** des épisodes anime convertis par les versions précédentes (son muet ou qui grésille) : la conversion `.ts` → `.mp4` y enregistrait une fréquence audio fausse (48000 Hz au lieu de 44100 Hz, par ex.). La vraie fréquence est retrouvée d'après la durée, et les données audio sont gardées telles quelles, sans ré-encodage.
 
+Elle **retague aussi le HEVC `hev1` → `hvc1`** (sans ré-encodage) : beaucoup de flux VOSTFR (moviepluto) sont en HEVC taggé `hev1`, que certains clients Plex (navigateur, Apple, TV) lisent mal — **image ou son absents**. Le retag corrige ça et il est appliqué automatiquement aux téléchargements moviepluto. Pour un fichier déjà pris : `4. Réglages → 15` (ou `python main.py --faststart "<dossier>"`).
+
 ## Serveur Plex sur un portable Linux
 
 Disposition conseillée (deux bibliothèques Plex de type **Séries TV**) :
