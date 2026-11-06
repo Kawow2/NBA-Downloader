@@ -15,9 +15,15 @@ l'anglais le plus souvent). On lit les pistes de deux façons, dans l'ordre :
   1. les URLs portées par la Source (un lecteur qui expose ses pistes) ;
   2. à défaut, via yt-dlp (extracteur générique) sur l'URL du lecteur.
 
-Les .vtt sont convertis en .srt (format le plus universel pour Plex)."""
+Les .vtt sont convertis en .srt (format le plus universel pour Plex).
+
+Recalage fréquence d'images : certains sous-titres viennent d'une source 25 fps
+(PAL) alors que la vidéo est en 23,976 fps → ils collent au début puis dérivent.
+Le réglage `films_subtitles_fps` (ou --sub-fps 25) réétire les temps d'un facteur
+sub_fps / fps_vidéo (le « décalage » de Plex ne corrige qu'un offset fixe)."""
 import os
 import re
+import subprocess
 
 import requests
 
@@ -219,6 +225,70 @@ def _pick_track(subs, code):
     return None
 
 
+# ---------------------------------------------------- recalage fréquence d'images
+_SRT_TS = re.compile(r"(\d{2}):(\d{2}):(\d{2}),(\d{3})")
+
+
+def _shift_ts(m, factor):
+    total = (((int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))) * 1000
+              + int(m.group(4))) * factor)
+    total = max(0, int(round(total)))
+    h, total = divmod(total, 3600000)
+    mi, total = divmod(total, 60000)
+    s, ms = divmod(total, 1000)
+    return f"{h:02d}:{mi:02d}:{s:02d},{ms:03d}"
+
+
+def rescale_srt_text(text, factor):
+    """Multiplie tous les timecodes SRT par `factor` (ex. 25/23.976)."""
+    return _SRT_TS.sub(lambda m: _shift_ts(m, factor), text)
+
+
+def _video_fps(path):
+    """Fréquence d'images réelle de la vidéo (ex. 23.976), ou None."""
+    try:
+        out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                              "stream=r_frame_rate", "-of", "default=nokey=1:noprint_wrappers=1", path],
+                             capture_output=True, text=True, timeout=60).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    num, _, den = out.partition("/")
+    try:
+        d = float(den) if den else 1.0
+        return float(num) / d if d else None
+    except ValueError:
+        return None
+
+
+def _maybe_rescale(srt_path, video_path):
+    """Si films_subtitles_fps est réglé (ex. 25), réétire le .srt pour qu'il
+    colle à la vraie fréquence de la vidéo."""
+    setting = get_setting("films_subtitles_fps")
+    if not setting:
+        return
+    try:
+        sub_fps = float(str(setting).replace(",", "."))
+    except (TypeError, ValueError):
+        return
+    if sub_fps <= 0:
+        return
+    vfps = _video_fps(video_path)
+    if not vfps:
+        return
+    factor = sub_fps / vfps
+    if abs(factor - 1) < 0.002:  # écart négligeable (< 0,2 %)
+        return
+    try:
+        with open(srt_path, encoding="utf-8") as f:
+            txt = f.read()
+        with open(srt_path, "w", encoding="utf-8") as f:
+            f.write(rescale_srt_text(txt, factor))
+        print_status(f"Sous-titres recalés {sub_fps:g}→{vfps:.3f} fps (×{factor:.4f}) : "
+                     f"{os.path.basename(srt_path)}", "info")
+    except OSError:
+        pass
+
+
 # -------------------------------------------------------------------- public
 def download_for(source, video_out_path, media=None, season=None, episode=None):
     """Télécharge les sous-titres voulus (FR + VO par défaut) en sidecars à côté
@@ -264,6 +334,7 @@ def download_for(source, video_out_path, media=None, season=None, episode=None):
         text = _fetch(url, referer=referer)
         path = _write_srt(text, stem, code) if text else None
         if path:
+            _maybe_rescale(path, video_out_path)
             written.append(path)
             print_status(f"Sous-titres {code.upper()} : {os.path.basename(path)}", "success")
 

@@ -87,7 +87,7 @@ Chaque `.mp4` téléchargé (anime, NBA et films/séries) a son index au **débu
 
 La même commande **répare le son** des épisodes anime convertis par les versions précédentes (son muet ou qui grésille) : la conversion `.ts` → `.mp4` y enregistrait une fréquence audio fausse (48000 Hz au lieu de 44100 Hz, par ex.). La vraie fréquence est retrouvée d'après la durée, et les données audio sont gardées telles quelles, sans ré-encodage.
 
-Elle **retague aussi le HEVC `hev1` → `hvc1`** (sans ré-encodage) : beaucoup de flux VOSTFR (moviepluto) sont en HEVC taggé `hev1`, que certains clients Plex (navigateur, Apple, TV) lisent mal — **image ou son absents**. Le retag corrige ça et il est appliqué automatiquement aux téléchargements moviepluto. Pour un fichier déjà pris : `4. Réglages → 15` (ou `python main.py --faststart "<dossier>"`).
+Elle **retague aussi le HEVC `hev1` → `hvc1`** (sans ré-encodage) : beaucoup de flux VOSTFR (moviepluto) sont en HEVC taggé `hev1`, que certains clients Plex (navigateur, Apple, TV) lisent mal — **image ou son absents**. Le retag corrige ça et il est appliqué automatiquement aux téléchargements moviepluto. Pour un fichier déjà pris : `4. Réglages → 16` (ou `python main.py --faststart "<dossier>"`).
 
 ## Serveur Plex sur un portable Linux
 
@@ -233,6 +233,7 @@ Créez une bibliothèque Plex **Films** (agent « Films ») sur `<dossier>/Films
 | `--lang vf\|vostfr` | langue : **VF** (nakios / zone) ou **VOSTFR / VOST** (moviepluto). Défaut : demandé (ou le réglage « langue par défaut ») |
 | `--url <URL>` | film / série directement (moviepluto `.../watch/<slug>/<id>[/<saison>/<épisode>]`, nakios `.../series/<id>`, `.../film/<id>` ou zone `.../?p=film&id=<id>-<slug>`) |
 | `--subtitles fr,vo` | sous-titres VOST en sidecar : `fr,vo` (défaut), `fr`, `vo`, `off`, ou des codes (ex. `fr,en`). Mémorisé |
+| `--sub-fps 25` | recale les sous-titres VOST qui **dérivent** (synchro au début puis décalage qui grandit) : fréquence d'origine des sous-titres, en général `25` (PAL). Vide = aucun recalage. Mémorisé |
 | `--moviepluto-server <serveur>` | lecteur moviepluto à utiliser pour le VOSTFR : nom de fruit (`BLUEBERRY`, `APRICOT`…) ou domaine (`vidzee`, `cinemaos`…). Vide = **Vidnest (défaut)**, `all` = tous les essayer. Mémorisé |
 | `--moviepluto-site <URL>` | si moviepluto change de domaine (mémorisé) |
 | `--tmdb-key "<clé>"` | clé API TMDB (gratuite, [themoviedb.org](https://www.themoviedb.org/settings/api)) pour la recherche VOSTFR moviepluto indépendamment de nakios (mémorisée en local, **jamais commitée**) |
@@ -394,7 +395,9 @@ Films/Inception (2010)/Inception (2010).fr.srt
 Films/Inception (2010)/Inception (2010).en.srt
 ```
 
-Plex (comme Jellyfin / Kodi) les détecte automatiquement et les propose comme pistes **activables/désactivables** dans le lecteur. Les `.vtt` sont convertis en `.srt`. Règle ça avec `--subtitles` ou `4. Réglages → 13` : `fr,vo` (défaut), `fr`, `vo`, `off`, ou des codes séparés par virgule (ex. `fr,en`). La récupération des sous-titres est **best-effort** : elle dépend du lecteur (certains n'en exposent pas).
+Plex (comme Jellyfin / Kodi) les détecte automatiquement et les propose comme pistes **activables/désactivables** dans le lecteur. Les `.vtt` sont convertis en `.srt`. Règle ça avec `--subtitles` ou `4. Réglages → 14` : `fr,vo` (défaut), `fr`, `vo`, `off`, ou des codes séparés par virgule (ex. `fr,en`). La récupération des sous-titres est **best-effort** : elle dépend du lecteur (certains n'en exposent pas).
+
+**Sous-titres qui dérivent (synchro au début, décalage qui grandit).** C'est une désynchro de **fréquence d'images** : les sous-titres viennent d'une source 25 fps (PAL) alors que la vidéo est en 23,976 fps. Le « décalage » de Plex ne corrige qu'un offset fixe, pas une dérive. Utilise **`--sub-fps 25`** (ou `4. Réglages → 15`) : les temps sont réétirés sur la vraie fréquence de la vidéo. Pour un épisode déjà pris avec des sous-titres décalés, supprime-le et retélécharge-le une fois `--sub-fps 25` réglé.
 
 > moviepluto, comme nakios, est une façade vers des lecteurs tiers qui changent souvent : si un serveur cesse de fonctionner, essaies-en un autre et fige-le.
 

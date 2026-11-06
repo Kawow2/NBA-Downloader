@@ -209,12 +209,15 @@ class Launcher:
             films_srv = self.get_setting("films_moviepluto_server")
             films_subs = self.get_setting("films_subtitles") or "fr,vo"
             films_tmdb = "✓ configurée" if self.get_setting("films_tmdb_key") else "(aucune — nakios ou URL collée)"
+            films_subfps = self.get_setting("films_subtitles_fps")
             print(f"  11. Films : langue par défaut (VF / VOSTFR)   : "
                   f"{(films_lang or '').upper() or '(demandé à chaque fois)'}")
             print(f"  12. Films : clé TMDB (recherche VOSTFR)       : {films_tmdb}")
             print(f"  13. Films : serveur moviepluto (VOSTFR)       : {films_srv or 'vidnest (défaut)'}")
             print(f"  14. Films : sous-titres VOST (sidecar Plex)   : {films_subs}")
-            print("  15. Optimiser/réparer les .mp4 déjà téléchargés (lecture immédiate dans Plex, son cassé)")
+            print(f"  15. Films : sous-titres — recalage fps        : "
+                  f"{films_subfps + ' fps' if films_subfps else '(aucun)'}")
+            print("  16. Optimiser/réparer les .mp4 déjà téléchargés (lecture immédiate dans Plex, son cassé)")
             print("   0. Retour")
             choice = _ask("Choix : ").strip()
             if choice in ("", "0", "q"):
@@ -290,6 +293,14 @@ class Launcher:
                 self.set_setting("films_subtitles", typed)
                 print(f"  {Colors.OKGREEN}✅ Sous-titres VOST : {typed}{Colors.ENDC}")
             elif choice == "15":
+                print(f"  {Colors.DIM}Si les sous-titres VOST sont synchro au début puis dérivent, indiquez leur "
+                      f"fréquence d'origine (en général 25 pour du PAL). Ils seront réétirés sur la vraie "
+                      f"fréquence de la vidéo.{Colors.ENDC}")
+                print(f"  {Colors.DIM}Vide = pas de recalage.{Colors.ENDC}")
+                typed = _ask("Fréquence des sous-titres (ex. 25, Entrée = aucun) : ").strip()
+                self.set_setting("films_subtitles_fps", typed)
+                print(f"  {Colors.OKGREEN}✅ Recalage sous-titres : {typed + ' fps' if typed else 'désactivé'}{Colors.ENDC}")
+            elif choice == "16":
                 from src.utils.mp4_faststart import fix_folder
                 for category in ("anime", "nba", "films"):
                     if os.path.isdir(self.folder(category)):

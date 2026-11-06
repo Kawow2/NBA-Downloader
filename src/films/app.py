@@ -995,6 +995,10 @@ def main():
     parser.add_argument("--subtitles", metavar="LANGS",
                         help="Sous-titres VOST en sidecar : 'fr,vo' (défaut), 'fr', 'vo', 'off', "
                              "ou des codes séparés par virgule (ex. fr,en). Mémorisé.")
+    parser.add_argument("--sub-fps", metavar="FPS",
+                        help="Recale les sous-titres VOST qui dérivent (synchro au début puis "
+                             "décalage qui grandit) : indique la fréquence d'origine des sous-titres, "
+                             "en général 25 (PAL). Vide = pas de recalage. Mémorisé.")
     parser.add_argument("--moviepluto-server", metavar="SERVEUR",
                         help="Serveur moviepluto à utiliser (nom de fruit ou domaine, ex. BLUEBERRY ou "
                              "vidzee ; mémorisé)")
@@ -1071,6 +1075,8 @@ def main():
         set_setting("films_sources_path", args.sources_path)
     if args.subtitles:
         set_setting("films_subtitles", args.subtitles.strip())
+    if args.sub_fps is not None:
+        set_setting("films_subtitles_fps", args.sub_fps.strip())
     if args.moviepluto_server:
         set_setting("films_moviepluto_server", args.moviepluto_server.strip())
     if args.moviepluto_site:
