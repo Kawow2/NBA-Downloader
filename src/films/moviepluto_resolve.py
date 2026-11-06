@@ -97,8 +97,6 @@ class MoviePlutoResolver:
                 locale="fr-FR", viewport={"width": 1280, "height": 800},
                 user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                             "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"))
-            # Les lecteurs ouvrent des pubs dans de nouveaux onglets : on les ferme.
-            self._context.on("page", lambda p: _safe_close_popup(p))
             return True
         except Exception as e:
             self._say(f"Navigateur : {str(e)[:150]}", "error")
@@ -129,6 +127,9 @@ class MoviePlutoResolver:
 
         page = self._context.new_page()
         page.on("response", on_response)
+        # Les lecteurs ouvrent des pubs dans de nouveaux onglets : on ferme ces
+        # pop-ups ENFANTS uniquement (surtout pas la page courante).
+        page.on("popup", _safe_close_popup)
         # Certains lecteurs bloquent les requêtes "media" si on coupe trop ;
         # on laisse tout charger, on observe seulement.
         nav_ok = True
@@ -141,10 +142,13 @@ class MoviePlutoResolver:
         # Si la page n'a pas chargé (DNS bloqué, hôte mort…), on abrège.
         deadline = time.time() + (timeout if nav_ok else 8)
         clicked = False
-        while time.time() < deadline:
-            if streams:
+        while time.time() < deadline and not streams:
+            if page.is_closed():
                 break
-            page.wait_for_timeout(1000)
+            try:
+                page.wait_for_timeout(1000)
+            except Exception:
+                break  # page/contexte fermé (pub, navigation…) : on s'arrête là
             # Beaucoup de players démarrent sur un clic : on tente une fois.
             if not clicked and time.time() > deadline - timeout + 3:
                 for action in (lambda: page.mouse.click(640, 400),
