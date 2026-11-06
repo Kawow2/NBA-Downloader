@@ -30,7 +30,8 @@ REQUIRED_MODULES = ("requests", "bs4", "tqdm", "yt_dlp", "curl_cffi", "Crypto", 
 # "films" word, or a site URL (guess_category).
 _ANIME_ONLY = ("--search", "--episodes", "--player", "--fast", "--mp4", "--tool", "--no-mal", "--latest")
 _NBA_ONLY = ("--quality", "--site", "--debug", "--default-dir", "--set-default-dir")
-_FILMS_ONLY = ("--profile-id", "--sources-path", "--season", "--cookie", "--kind")
+_FILMS_ONLY = ("--profile-id", "--sources-path", "--season", "--cookie", "--kind",
+               "--moviepluto-server", "--moviepluto-site", "--subtitles")
 _LAUNCHER_OPTS = ("--anime-dir", "--nba-dir", "--films-dir",
                   "--set-anime-dir", "--set-nba-dir", "--set-films-dir", "--faststart")
 
@@ -128,7 +129,8 @@ def guess_category(args):
             return "anime"
         if "basketball-video" in url:
             return "nba"
-        if "nakios" in url or (films_host and films_host in url) \
+        if "nakios" in url or "moviepluto" in url or (films_host and films_host in url) \
+                or re.search(r"/watch/[^/]+/\d+", url) \
                 or re.search(r"/(series|serie|film|films|movie|movies)/\d+", url):
             return "films"
     return None
@@ -203,7 +205,14 @@ class Launcher:
             print(f"   9. Films : qualité max                       : "
                   f"{'la meilleure' if films_quality == 'best' else films_quality + 'p'}")
             print(f"  10. Films : endpoint des lecteurs (avancé)    : {self.get_setting('films_sources_path') or '(auto)'}")
-            print("  11. Optimiser/réparer les .mp4 déjà téléchargés (lecture immédiate dans Plex, son cassé)")
+            films_lang = self.get_setting("films_lang")
+            films_srv = self.get_setting("films_moviepluto_server")
+            films_subs = self.get_setting("films_subtitles") or "fr,vo"
+            print(f"  11. Films : langue par défaut (VF / VOSTFR)   : "
+                  f"{(films_lang or '').upper() or '(demandé à chaque fois)'}")
+            print(f"  12. Films : serveur moviepluto (VOSTFR)       : {films_srv or '(tous, ordre par défaut)'}")
+            print(f"  13. Films : sous-titres VOST (sidecar Plex)   : {films_subs}")
+            print("  14. Optimiser/réparer les .mp4 déjà téléchargés (lecture immédiate dans Plex, son cassé)")
             print("   0. Retour")
             choice = _ask("Choix : ").strip()
             if choice in ("", "0", "q"):
@@ -241,6 +250,36 @@ class Launcher:
                 self.set_setting("films_sources_path", typed)
                 print(f"  {Colors.OKGREEN}✅ Enregistré : {typed or '(auto)'}{Colors.ENDC}")
             elif choice == "11":
+                typed = _ask("Langue par défaut (vf / vostfr, Entrée = demander à chaque fois) : ").strip().lower()
+                if typed in ("", "demander", "ask"):
+                    self.set_setting("films_lang", "")
+                    print(f"  {Colors.OKGREEN}✅ La langue sera demandée à chaque lancement.{Colors.ENDC}")
+                elif typed in ("vf", "vff", "vfq", "french", "fr"):
+                    self.set_setting("films_lang", "vf")
+                    print(f"  {Colors.OKGREEN}✅ Langue par défaut : VF.{Colors.ENDC}")
+                elif typed in ("vost", "vostfr", "vo"):
+                    self.set_setting("films_lang", "vost")
+                    print(f"  {Colors.OKGREEN}✅ Langue par défaut : VOSTFR / VOST.{Colors.ENDC}")
+                elif typed in ("all", "tout", "tous"):
+                    self.set_setting("films_lang", "all")
+                    print(f"  {Colors.OKGREEN}✅ Langue par défaut : VF + VOSTFR.{Colors.ENDC}")
+                else:
+                    print(f"  {Colors.FAIL}Valeur invalide.{Colors.ENDC}")
+            elif choice == "12":
+                print(f"  {Colors.DIM}Serveur moviepluto pour le VOSTFR : nom de fruit (BLUEBERRY, APRICOT, "
+                      f"AVOCADO…) ou domaine (vidzee, cinemaos…).{Colors.ENDC}")
+                print(f"  {Colors.DIM}Repérez sur moviepluto celui qui joue bien en VOSTFR. "
+                      f"Vide = essayer tous les serveurs.{Colors.ENDC}")
+                typed = _ask("Serveur moviepluto : ").strip()
+                self.set_setting("films_moviepluto_server", typed)
+                print(f"  {Colors.OKGREEN}✅ Serveur moviepluto : {typed or '(tous)'}{Colors.ENDC}")
+            elif choice == "13":
+                print(f"  {Colors.DIM}Sous-titres à récupérer en VOST (fichier à côté du .mp4, lu par Plex) : "
+                      f"« fr,vo » (défaut), « fr », « vo », « off », ou des codes (ex. fr,en).{Colors.ENDC}")
+                typed = _ask("Sous-titres VOST (Entrée = fr,vo) : ").strip().lower() or "fr,vo"
+                self.set_setting("films_subtitles", typed)
+                print(f"  {Colors.OKGREEN}✅ Sous-titres VOST : {typed}{Colors.ENDC}")
+            elif choice == "14":
                 from src.utils.mp4_faststart import fix_folder
                 for category in ("anime", "nba", "films"):
                     if os.path.isdir(self.folder(category)):
@@ -254,8 +293,8 @@ class Launcher:
             print(f"\n{Colors.HEADER}{Colors.BOLD}╔{'═' * w}╗\n║{'ANIME · NBA · FILMS & SÉRIES  DOWNLOADER'.center(w)}║\n╚{'═' * w}╝{Colors.ENDC}")
             print(f"  1. 🎌 Anime           {Colors.DIM}(anime-sama, nakanime)        → {self.folder('anime')}{Colors.ENDC}")
             print(f"  2. 🏀 NBA             {Colors.DIM}(basketball-video.com)        → {self.folder('nba')}{Colors.ENDC}")
-            print(f"  3. 🎬 Films           {Colors.DIM}(nakios, zone-telechargement) → {os.path.join(self.folder('films'), 'Films')}{Colors.ENDC}")
-            print(f"  4. 📺 Séries          {Colors.DIM}(nakios.rent)                 → {os.path.join(self.folder('films'), 'Séries')}{Colors.ENDC}")
+            print(f"  3. 🎬 Films           {Colors.DIM}(VF : nakios, zone · VOSTFR : moviepluto) → {os.path.join(self.folder('films'), 'Films')}{Colors.ENDC}")
+            print(f"  4. 📺 Séries          {Colors.DIM}(VF : nakios · VOSTFR : moviepluto)       → {os.path.join(self.folder('films'), 'Séries')}{Colors.ENDC}")
             print(f"  5. ⚙️  Réglages {Colors.DIM}(dossiers, parallélisme, qualité){Colors.ENDC}")
             print("  q. Quitter")
             choice = _ask("Choix : ").strip().lower()

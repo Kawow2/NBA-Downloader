@@ -32,6 +32,7 @@ from src.utils.check.check_folder import folder_problem
 from src.utils.mp4_faststart import ensure_faststart
 from src.films.site import Site, parse_media_url
 from src.films import plex
+from src.films import subtitles as subs
 from src.nba import fast_http
 from src.nba.downloader import download_part, configure, SETTINGS, ffmpeg_hint, temp_files
 
@@ -50,6 +51,10 @@ def _already_downloaded(out_path):
 FALLBACK_DEFAULT_DIR = os.path.join(os.path.expanduser("~"), "Videos", "Films")
 
 _default_dir_override = None
+
+# Préférence de langue de la session ('vf', 'vost', 'all' ou None). Fixée dans
+# main() ; utilisée pour classer les lecteurs par langue (_ordered_sources).
+_lang_pref = None
 
 
 def default_dir():
@@ -75,6 +80,23 @@ def yes(prompt, default=True):
     if not ans:
         return default
     return ans in ("o", "oui", "y", "yes", "1")
+
+
+def ask_language():
+    """Demande VF ou VOSTFR/VOST. Renvoie 'vf' ou 'vost'."""
+    print(f"\n{Colors.BOLD}{Colors.HEADER}🗣️  LANGUE{Colors.ENDC}")
+    print(f"  {Colors.BOLD}1.{Colors.ENDC} VF {Colors.DIM}(français — nakios, zone-téléchargement){Colors.ENDC}")
+    print(f"  {Colors.BOLD}2.{Colors.ENDC} VOSTFR / VOST {Colors.DIM}(VO sous-titrée — moviepluto, sous-titres FR + VO){Colors.ENDC}")
+    while True:
+        pick = ask("Choix (1 = VF, 2 = VOSTFR, Entrée = VF) : ").strip().lower()
+        if pick in ("", "1"):
+            return "vf"
+        if pick == "2":
+            return "vost"
+        p = _parse_lang(pick)
+        if p in ("vf", "vost"):
+            return p
+        print_status("Choix invalide.", "error")
 
 
 def parse_selection(text, available):
@@ -237,9 +259,15 @@ class NakiosProvider:
         return self.site.sources(media, season=season, episode=episode)
 
 
-def build_providers(site, nakios_ready):
-    """Fournisseurs actifs : nakios (si session OK) + zone-telechargement (si
-    une clé AllDebrid est configurée)."""
+def build_providers(site, nakios_ready, lang_pref=None):
+    """Fournisseurs actifs selon la langue voulue :
+      - 'vost'  : moviepluto (VOSTFR / VOST) ;
+      - 'vf' / None : nakios (si session OK) + zone-telechargement (si une clé
+        AllDebrid est configurée) — comportement historique ;
+      - 'all'   : les deux ensemble."""
+    if lang_pref == "vost":
+        from src.films.moviepluto import MoviePluto
+        return [MoviePluto(site)]
     providers = []
     if nakios_ready:
         providers.append(NakiosProvider(site))
@@ -247,6 +275,9 @@ def build_providers(site, nakios_ready):
         from src.films.zonetelechargement import Zone
         from src.films.alldebrid import AllDebrid
         providers.append(Zone(debrid=AllDebrid()))
+    if lang_pref == "all":
+        from src.films.moviepluto import MoviePluto
+        providers.append(MoviePluto(site))
     return providers
 
 
@@ -257,6 +288,46 @@ def _parse_kind(text):
         return "movie"
     if t in ("s", "serie", "série", "series", "séries", "tv", "show", "shows"):
         return "tv"
+    return None
+
+
+def _parse_lang(text):
+    """'vf'… -> 'vf', 'vost'/'vostfr'… -> 'vost', 'all' -> 'all', sinon None."""
+    t = (text or "").strip().lower()
+    if t in ("vf", "vff", "vfq", "truefrench", "french", "fr", "1"):
+        return "vf"
+    if t in ("vost", "vostfr", "vo", "sub", "subbed", "2"):
+        return "vost"
+    if t in ("all", "tout", "tous", "both", "les deux", "3"):
+        return "all"
+    return None
+
+
+# Familles de langues pour classer les lecteurs selon la préférence VF/VOST.
+_VF_LANGS = {"VF", "VFF", "VFQ", "TRUEFRENCH", "FRENCH", "MULTI", "FR"}
+_VOST_LANGS = {"VOSTFR", "VOST", "VO"}
+
+
+def _lang_group(lang):
+    """'vf' / 'vost' / None pour une langue de Source (ex. 'VOSTFR' -> 'vost')."""
+    l = (lang or "").upper()
+    if l in _VF_LANGS:
+        return "vf"
+    if l in _VOST_LANGS:
+        return "vost"
+    return None
+
+
+def _determine_lang(args):
+    """Préférence de langue : --lang, sinon réglage mémorisé, sinon on demande
+    (en interactif). None = comportement par défaut (VF) en non-interactif."""
+    if args.lang:
+        return _parse_lang(args.lang)
+    stored = _parse_lang(get_setting("films_lang") or "")
+    if stored:
+        return stored
+    if sys.stdin.isatty():
+        return ask_language()
     return None
 
 
@@ -276,9 +347,28 @@ def search_all(providers, query, per_source=10, kind=None):
 
 
 def media_from_url(url, providers):
-    """Reconnaît une URL collée (nakios .../series|film/<id>, ou zone
-    .../?p=film&id=…) et renvoie un média rattaché au bon fournisseur."""
+    """Reconnaît une URL collée (moviepluto .../watch/<slug>/<id>[/s/e],
+    nakios .../series|film/<id>, ou zone .../?p=film&id=…) et renvoie un média
+    rattaché au bon fournisseur."""
     from src.films.site import Media
+    # moviepluto : /watch/<slug>/<id>[/<saison>/<épisode>]
+    mp = next((p for p in providers if getattr(p, "name", None) == "moviepluto"), None)
+    if mp and ("moviepluto" in url.lower() or "/watch/" in url.lower()):
+        from src.films.moviepluto import parse_watch_url
+        parsed_mp = parse_watch_url(url)
+        if parsed_mp:
+            mtype, tmdb, season, episode = parsed_mp
+            # Titre de secours depuis le slug de l'URL (remplacé par le vrai
+            # titre TMDB dans details() si la session répond).
+            slug_m = re.search(r"/watch/([^/]+)/\d+", url)
+            title = re.sub(r"[-_]+", " ", slug_m.group(1)).strip().title() if slug_m else None
+            m = Media({"id": tmdb, "title": title} if title else {"id": tmdb}, media_type=mtype)
+            m.provider = mp
+            if season is not None:
+                m.pinned_season = season
+            if episode is not None:
+                m.pinned_episode = episode
+            return m
     parsed = parse_media_url(url)
     nak = next((p for p in providers if p.name == "nakios"), None)
     if parsed and nak:
@@ -379,6 +469,14 @@ def choose_dest(cli_dest):
 def _no_sources_help(provider, media, season=None, episode=None):
     what = f"S{season:02d}E{episode:02d}" if season else "ce film"
     print_status(f"Aucun lecteur trouvé pour {what}.", "error")
+    if getattr(provider, "name", None) == "moviepluto":
+        print_status("moviepluto renvoie vers plusieurs lecteurs : certains n'ont pas ce titre, "
+                     "ne proposent pas de VOSTFR, ou ne sont pas extractibles.", "info")
+        print(f"   {Colors.DIM}1. Ouvrez le titre sur {provider.base} et repérez le serveur (fruit) qui "
+              f"joue bien en VOSTFR.{Colors.ENDC}")
+        print(f"   {Colors.DIM}2. Figez-le : Réglages → « serveur moviepluto », ou "
+              f"--moviepluto-server BLUEBERRY (ou le domaine, ex. vidzee).{Colors.ENDC}")
+        return
     if getattr(provider, "name", None) != "nakios":
         print_status(f"Aucun lien de téléchargement exploitable sur cette page ({provider.base}).", "info")
         return
@@ -409,13 +507,24 @@ def choose_source(sources, interactive):
         print_status("Choix invalide.", "error")
 
 
+def _lang_bonus(src):
+    """Gros bonus de tri si la langue du lecteur correspond à la préférence
+    VF/VOST de la session."""
+    if _lang_pref in ("vf", "vost") and _lang_group(src.lang) == _lang_pref:
+        return 5000
+    return 0
+
+
 def _ordered_sources(sources, prefer):
-    """Lecteurs ordonnés pour l'essai : le préféré (même hébergeur / qualité /
-    langue) d'abord, sinon par qualité décroissante."""
+    """Lecteurs ordonnés pour l'essai : la langue voulue (VF/VOST) d'abord, puis
+    le lecteur préféré (même hébergeur / qualité / langue), sinon par qualité
+    décroissante."""
     if not prefer:
+        if _lang_pref in ("vf", "vost"):
+            return sorted(sources, key=lambda s: _lang_bonus(s) + (s.height or 0), reverse=True)
         return list(sources)  # site.sources() renvoie déjà meilleure qualité d'abord
     def score(s):
-        sc = 0
+        sc = _lang_bonus(s)
         if s.host == prefer.host:
             sc += 1000
         if prefer.height and s.height == prefer.height:
@@ -527,6 +636,18 @@ def _download_via_debrid(provider, src, out_path):
     return None
 
 
+def _maybe_subtitles(provider, src, out_path, media, season, episode):
+    """Récupère les sous-titres FR + VO en sidecar pour une source VOST
+    (moviepluto, ou toute source étiquetée VOSTFR/VOST). Best-effort."""
+    is_vost = getattr(provider, "name", None) == "moviepluto" or _lang_group(getattr(src, "lang", None)) == "vost"
+    if not is_vost:
+        return
+    try:
+        subs.download_for(src, out_path, media=media, season=season, episode=episode)
+    except Exception as e:
+        print_status(f"Sous-titres : échec ({str(e)[:100]})", "warning")
+
+
 def download_media(provider, media, out_path, season=None, episode=None, prefer=None, sources=None):
     """Télécharge le premier lecteur qui fonctionne (ordonné selon `prefer`).
     Les sources « téléchargement » (zone) passent par le débrideur."""
@@ -548,6 +669,7 @@ def download_media(provider, media, out_path, season=None, episode=None, prefer=
                 print_status(f"Enregistré : {final}", "success")
                 return True
         elif download_part(src.url, out_path, page_url=provider.base + "/"):
+            _maybe_subtitles(provider, src, out_path, media, season, episode)
             print_status(f"Enregistré : {out_path}", "success")
             return True
         print_status(f"Échec sur « {src.describe()} », lecteur suivant…", "warning")
@@ -663,6 +785,11 @@ def clean_temp_files(folder, stem, keep_own=False):
 
 
 def process(provider, media, dest, cli_season=None, cli_episodes=None):
+    # Une URL moviepluto .../<id>/<saison>/<épisode> pré-remplit le choix.
+    if not cli_season and getattr(media, "pinned_season", None):
+        cli_season = str(media.pinned_season)
+    if not cli_episodes and getattr(media, "pinned_episode", None):
+        cli_episodes = str(media.pinned_episode)
     if media.is_series:
         return process_series(provider, media, dest, cli_season, cli_episodes)
     return process_movie(provider, media, dest)
@@ -769,13 +896,23 @@ def deliver_session_token(token, out=None, push=None, push_dir="~/code/NBA-Downl
 
 # -------------------------------------------------------------------- main
 def main():
-    global _default_dir_override
+    global _default_dir_override, _lang_pref
     parser = argparse.ArgumentParser(prog="main.py films",
                                      description="Télécharge des films et séries en .mp4 pour Plex.")
     parser.add_argument("--url", help="URL d'un film / d'une série (ex. https://nakios.rent/series/87108)")
     parser.add_argument("--search", help="Recherche directe par titre")
     parser.add_argument("--kind", choices=["film", "serie", "série", "movie", "tv"],
                         help="Limite la recherche aux films ou aux séries (défaut : les deux)")
+    parser.add_argument("--lang", choices=["vf", "vff", "vfq", "vost", "vostfr", "vo", "all"],
+                        help="Langue : VF (nakios/zone) ou VOSTFR/VOST (moviepluto). Défaut : demandé.")
+    parser.add_argument("--subtitles", metavar="LANGS",
+                        help="Sous-titres VOST en sidecar : 'fr,vo' (défaut), 'fr', 'vo', 'off', "
+                             "ou des codes séparés par virgule (ex. fr,en). Mémorisé.")
+    parser.add_argument("--moviepluto-server", metavar="SERVEUR",
+                        help="Serveur moviepluto à utiliser (nom de fruit ou domaine, ex. BLUEBERRY ou "
+                             "vidzee ; mémorisé)")
+    parser.add_argument("--moviepluto-site", metavar="URL",
+                        help="URL de moviepluto si le domaine change (mémorisée)")
     parser.add_argument("--season", help="Saison(s) pour une série (ex. 1, 1-3, all)")
     parser.add_argument("--episodes", help="Épisode(s) (ex. 1-5, 1,3,5, all)")
     parser.add_argument("--dest", help="Dossier de destination (sinon le chemin par défaut)")
@@ -842,6 +979,12 @@ def main():
         set_setting("films_user_agent", args.user_agent)
     if args.sources_path:
         set_setting("films_sources_path", args.sources_path)
+    if args.subtitles:
+        set_setting("films_subtitles", args.subtitles.strip())
+    if args.moviepluto_server:
+        set_setting("films_moviepluto_server", args.moviepluto_server.strip())
+    if args.moviepluto_site:
+        set_setting("films_moviepluto_site_url", args.moviepluto_site.rstrip("/"))
     if args.quality:
         set_setting("films_quality", args.quality)
     if args.threads:
@@ -869,6 +1012,20 @@ def main():
     banner(site)
     if kind:
         print(f"  {Colors.DIM}Filtre : {'films' if kind == 'movie' else 'séries'} uniquement{Colors.ENDC}")
+
+    # Choix de la langue (VF / VOSTFR), demandé une fois pour la session.
+    _lang_pref = _determine_lang(args)
+    if _lang_pref == "vost":
+        srv = get_setting("films_moviepluto_server")
+        subs_label = subs.subtitles_setting()
+        print(f"  {Colors.DIM}Langue : VOSTFR / VOST (moviepluto){Colors.ENDC}")
+        print(f"  {Colors.DIM}Serveur moviepluto : {srv or '(tous, ordre par défaut)'} · "
+              f"sous-titres : {'aucun' if not subs.subtitles_enabled() else subs_label}{Colors.ENDC}")
+    elif _lang_pref == "all":
+        print(f"  {Colors.DIM}Langue : VF + VOSTFR (toutes sources){Colors.ENDC}")
+    elif _lang_pref == "vf":
+        print(f"  {Colors.DIM}Langue : VF (nakios, zone-téléchargement){Colors.ENDC}")
+
     print(f"  {Colors.DIM}Chemin par défaut : {default_dir()}{Colors.ENDC}")
     quality_label = f"{SETTINGS['max_height']}p max" if SETTINGS["max_height"] else "la meilleure"
     print(f"  {Colors.DIM}Qualité : {quality_label} · {SETTINGS['threads']} téléchargements en parallèle{Colors.ENDC}")
@@ -884,15 +1041,21 @@ def main():
                      "success" if ok else "error")
         return
 
-    # Nakios (streaming) exige une session Cloudflare : on l'obtient si possible,
-    # mais ce n'est plus bloquant — zone-telechargement (+ AllDebrid) peut suffire
-    # à lui seul, et inversement.
+    # La session Cloudflare sert à la recherche « façon TMDB » (nakios ET
+    # moviepluto, qui réutilise cette recherche pour trouver l'id). On l'obtient
+    # si possible ; ce n'est pas bloquant (zone + AllDebrid, ou une URL collée
+    # pour moviepluto, fonctionnent sans).
     nakios_ready = ensure_session(site, sys.stdin.isatty(), use_browser=not args.no_browser,
                                   browser_visible=args.browser_visible, profile_dir=profile_dir)
     if not nakios_ready:
-        print_status("Nakios (streaming) indisponible pour l'instant (session non obtenue).", "warning")
+        if _lang_pref == "vost":
+            print_status("Session indisponible : la recherche moviepluto a besoin de la session, "
+                         "mais tu peux toujours coller une URL moviepluto (.../watch/<slug>/<id>/...).",
+                         "warning")
+        else:
+            print_status("Nakios (streaming) indisponible pour l'instant (session non obtenue).", "warning")
 
-    providers = build_providers(site, nakios_ready)
+    providers = build_providers(site, nakios_ready, lang_pref=_lang_pref)
     if not providers:
         print_status("Aucune source active : ni session Nakios, ni clé AllDebrid pour "
                      "zone-telechargement. Configure au moins l'une des deux "
@@ -907,8 +1070,9 @@ def main():
         if args.url:
             media = media_from_url(args.url, providers)
             if media is None:
-                print_status("URL non reconnue (nakios .../series|film/<id>, ou zone .../?p=film&id=…), "
-                             "ou le fournisseur correspondant n'est pas actif.", "error")
+                print_status("URL non reconnue (moviepluto .../watch/<slug>/<id>[/s/e], nakios "
+                             ".../series|film/<id>, ou zone .../?p=film&id=…), ou le fournisseur "
+                             "correspondant n'est pas actif pour cette langue.", "error")
                 return
         elif args.search:
             results = search_all(providers, args.search, kind=kind)
