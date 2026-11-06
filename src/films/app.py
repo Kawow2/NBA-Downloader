@@ -56,6 +56,10 @@ _default_dir_override = None
 # main() ; utilisée pour classer les lecteurs par langue (_ordered_sources).
 _lang_pref = None
 
+# Navigateur visible (pour la résolution des lecteurs moviepluto) ; fixé dans
+# main() depuis --browser-visible.
+_browser_visible = False
+
 
 def default_dir():
     return _default_dir_override or get_setting("films_default_dir") or FALLBACK_DEFAULT_DIR
@@ -648,6 +652,45 @@ def _maybe_subtitles(provider, src, out_path, media, season, episode):
         print_status(f"Sous-titres : échec ({str(e)[:100]})", "warning")
 
 
+def _download_resolved(provider, media, out_path, ordered, season, episode):
+    """Lecteurs à résoudre (moviepluto) : un navigateur ouvre chaque lecteur,
+    capte le flux .m3u8 (+ sous-titres), puis on télécharge le flux. Un seul
+    navigateur sert pour tous les lecteurs essayés."""
+    from src.films import moviepluto_resolve as mpr
+    if not mpr.available():
+        print_status("Playwright est requis pour extraire les lecteurs moviepluto.", "error")
+        from src.films import session as browser_session
+        if sys.stdin.isatty() and yes("L'installer maintenant (~1 min, une seule fois) ?", default=True):
+            browser_session.install(status=print_status)
+        if not mpr.available():
+            print_status(f"À installer à la main : {mpr.install_hint()}", "info")
+            return False
+    resolver = mpr.MoviePlutoResolver(status=print_status, headless=not _browser_visible)
+    if not resolver.start():
+        return False
+    try:
+        for i, src in enumerate(ordered, 1):
+            print_separator(title=f"LECTEUR {i}/{len(ordered)} · {src.describe()}")
+            print_status("Ouverture du lecteur dans le navigateur (capture du flux)…", "loading")
+            info = resolver.resolve(src.url, getattr(src, "page_referer", None))
+            if not info or not info.get("stream"):
+                print_status("Aucun flux capté sur ce lecteur, suivant…", "warning")
+                continue
+            if info.get("subtitles"):
+                src.subtitles = info["subtitles"]
+            stream, ref = info["stream"], info.get("referer") or getattr(src, "page_referer", None)
+            print_status(f"Flux capté : {stream[:90]}…", "success")
+            if download_part(stream, out_path, page_url=ref):
+                _maybe_subtitles(provider, src, out_path, media, season, episode)
+                print_status(f"Enregistré : {out_path}", "success")
+                return True
+            print_status(f"Téléchargement du flux échoué (« {src.describe()} »), lecteur suivant…", "warning")
+        print_status("Aucun lecteur exploitable (flux non capté ou non téléchargeable).", "error")
+        return False
+    finally:
+        resolver.close()
+
+
 def download_media(provider, media, out_path, season=None, episode=None, prefer=None, sources=None):
     """Télécharge le premier lecteur qui fonctionne (ordonné selon `prefer`).
     Les sources « téléchargement » (zone) passent par le débrideur."""
@@ -661,6 +704,10 @@ def download_media(provider, media, out_path, season=None, episode=None, prefer=
         _no_sources_help(provider, media, season, episode)
         return False
     ordered = _ordered_sources(sources, prefer)
+    # Lecteurs moviepluto : pages JS qu'il faut résoudre dans un navigateur
+    # pour en capter le flux .m3u8 (+ sous-titres). Chemin dédié.
+    if any(getattr(s, "needs_resolve", False) for s in ordered):
+        return _download_resolved(provider, media, out_path, ordered, season, episode)
     for i, src in enumerate(ordered, 1):
         print_separator(title=f"LECTEUR {i}/{len(ordered)} · {src.describe()}")
         if getattr(src, "needs_debrid", False):
@@ -925,7 +972,7 @@ def deliver_session_token(token, out=None, push=None, push_dir="~/code/NBA-Downl
 
 # -------------------------------------------------------------------- main
 def main():
-    global _default_dir_override, _lang_pref
+    global _default_dir_override, _lang_pref, _browser_visible
     parser = argparse.ArgumentParser(prog="main.py films",
                                      description="Télécharge des films et séries en .mp4 pour Plex.")
     parser.add_argument("--url", help="URL d'un film / d'une série (ex. https://nakios.rent/series/87108)")
@@ -1048,6 +1095,7 @@ def main():
     if kind:
         print(f"  {Colors.DIM}Filtre : {'films' if kind == 'movie' else 'séries'} uniquement{Colors.ENDC}")
 
+    _browser_visible = args.browser_visible
     # Choix de la langue (VF / VOSTFR), demandé une fois pour la session.
     _lang_pref = _determine_lang(args)
     if _lang_pref == "vost":

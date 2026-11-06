@@ -376,6 +376,13 @@ Choisis **VOSTFR / VOST** au lancement (`2` dans le menu, ou `--lang vostfr`) : 
 
 Pour cibler le lecteur au plus juste, tu peux aussi copier, dans `F12 → Réseau`, l'URL du lecteur (iframe) ou du flux `.m3u8` pendant la lecture.
 
+**Comment l'extraction marche (important).** Ces lecteurs sont des players JavaScript obfusqués : yt-dlp ne sait pas les lire (`Unsupported URL`). Le programme ouvre donc chaque lecteur dans un **vrai navigateur ([Playwright](https://playwright.dev), déjà requis)**, le laisse démarrer, et **capture le flux `.m3u8` (et les pistes de sous-titres)** qui passent sur le réseau, puis télécharge ce flux. Conséquences :
+
+- **Playwright doit être installé** (le programme le propose au besoin) : `pip install playwright && playwright install chromium`.
+- Si un lecteur ne démarre pas en mode invisible, relance avec **`--browser-visible`** (fenêtre visible, passe mieux les protections).
+- **DNS** : si tu vois `Failed to resolve 'vidlink.pro'` / `'player.vidlove.cc'`, ton DNS/FAI bloque ces domaines. Passe ton DNS sur **1.1.1.1** (Cloudflare) ou **8.8.8.8** (Google) pour débloquer ces lecteurs — sinon ils échoueront aussi dans ton propre navigateur.
+- Épingle le lecteur qui marche (`Réglages → 13`) pour éviter d'essayer les 14 à chaque fois.
+
 **Sous-titres (sidecar Plex).** Par défaut, le **français** et la **VO** (langue originale, souvent l'anglais) sont téléchargés en fichiers à côté de la vidéo :
 
 ```

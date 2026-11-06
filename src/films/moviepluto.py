@@ -234,5 +234,9 @@ class MoviePluto:
             src.host = f"{name} · {src.host}"
             src.provider = self
             src.page_referer = self.base + "/"
+            # L'URL est une page de lecteur JS (pas un flux direct) : il faut la
+            # résoudre dans un navigateur pour en capter le .m3u8 (voir
+            # src/films/moviepluto_resolve.py).
+            src.needs_resolve = True
             out.append(src)
         return out
