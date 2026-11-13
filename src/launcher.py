@@ -255,21 +255,16 @@ class Launcher:
                 self.set_setting("films_sources_path", typed)
                 print(f"  {Colors.OKGREEN}✅ Enregistré : {typed or '(auto)'}{Colors.ENDC}")
             elif choice == "11":
+                from src.films.app import _parse_lang
                 typed = _ask("Langue par défaut (vf / vostfr, Entrée = demander à chaque fois) : ").strip().lower()
-                if typed in ("", "demander", "ask"):
-                    self.set_setting("films_lang", "")
-                    print(f"  {Colors.OKGREEN}✅ La langue sera demandée à chaque lancement.{Colors.ENDC}")
-                elif typed in ("vf", "vff", "vfq", "french", "fr"):
-                    self.set_setting("films_lang", "vf")
-                    print(f"  {Colors.OKGREEN}✅ Langue par défaut : VF.{Colors.ENDC}")
-                elif typed in ("vost", "vostfr", "vo"):
-                    self.set_setting("films_lang", "vost")
-                    print(f"  {Colors.OKGREEN}✅ Langue par défaut : VOSTFR / VOST.{Colors.ENDC}")
-                elif typed in ("all", "tout", "tous"):
-                    self.set_setting("films_lang", "all")
-                    print(f"  {Colors.OKGREEN}✅ Langue par défaut : VF + VOSTFR.{Colors.ENDC}")
-                else:
+                lang = "" if typed in ("", "demander", "ask") else _parse_lang(typed)
+                labels = {"": "La langue sera demandée à chaque lancement.", "vf": "Langue par défaut : VF.",
+                          "vost": "Langue par défaut : VOSTFR / VOST.", "all": "Langue par défaut : VF + VOSTFR."}
+                if lang is None:
                     print(f"  {Colors.FAIL}Valeur invalide.{Colors.ENDC}")
+                else:
+                    self.set_setting("films_lang", lang)
+                    print(f"  {Colors.OKGREEN}✅ {labels[lang]}{Colors.ENDC}")
             elif choice == "12":
                 print(f"  {Colors.DIM}Clé API TMDB (gratuite) pour chercher les titres VOSTFR (moviepluto) "
                       f"sans dépendre de nakios.{Colors.ENDC}")

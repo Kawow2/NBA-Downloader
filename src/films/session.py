@@ -60,6 +60,31 @@ def install_hint():
     return "pip install playwright && playwright install chromium"
 
 
+def chromium_launch_options(headless, extra_args=()):
+    """Options de lancement Chromium communes (anti-détection, binaire forcé
+    par FILMS_CHROMIUM_PATH)."""
+    launch = {"headless": headless,
+              "args": ["--disable-blink-features=AutomationControlled", "--no-sandbox", *extra_args]}
+    exe = os.environ.get("FILMS_CHROMIUM_PATH")
+    if exe:
+        launch["executable_path"] = exe
+    return launch
+
+
+def launch_chromium(pw, launch):
+    """Lance un navigateur éphémère : vrai Chrome d'abord (meilleur passage
+    Cloudflare), puis le Chromium embarqué de Playwright (sauf binaire forcé).
+    Renvoie (browser, None) ou (None, dernière erreur)."""
+    attempts = [launch] if "executable_path" in launch else [dict(launch, channel="chrome"), launch]
+    last = None
+    for kw in attempts:
+        try:
+            return pw.chromium.launch(**kw), None
+        except Exception as e:
+            last = e
+    return None, last
+
+
 def install(status=None):
     """Installe Playwright + Chromium dans l'interpréteur courant (le .venv
     quand lancé via start.sh/ps1). True si disponible ensuite."""
@@ -216,13 +241,9 @@ class BrowserSession:
         from playwright.sync_api import sync_playwright
         if self._pw is None:
             self._pw = sync_playwright().start()
-        args = ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
         ctx_opts = {"locale": "fr-FR", "timezone_id": "Europe/Paris",
                     "viewport": {"width": 1280, "height": 800}}
-        launch = {"headless": headless, "args": args}
-        exe = os.environ.get("FILMS_CHROMIUM_PATH")
-        if exe:
-            launch["executable_path"] = exe
+        launch = chromium_launch_options(headless)
         # Profil persistant : un seul contexte, pas de navigateur séparé. C'est
         # lui qui garde la clearance Cloudflare d'un lancement à l'autre.
         if self.profile_dir:
@@ -234,13 +255,9 @@ class BrowserSession:
                 return True
             except Exception as e:
                 self._say(f"Profil persistant indisponible ({str(e)[:80]}), session éphémère.", "warning")
-        # Éphémère : vrai Chrome d'abord (meilleur passage Cloudflare), puis le
-        # Chromium embarqué de Playwright.
-        attempts = [dict(launch)] if exe else [dict(launch, channel="chrome"), dict(launch)]
-        last = None
-        for kw in attempts:
+        self._browser, last = launch_chromium(self._pw, launch)
+        if self._browser:
             try:
-                self._browser = self._pw.chromium.launch(**kw)
                 self._context = self._browser.new_context(**ctx_opts)
                 return True
             except Exception as e:

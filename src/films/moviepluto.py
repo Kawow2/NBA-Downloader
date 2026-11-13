@@ -23,14 +23,12 @@ tous les lecteurs connus sont proposés dans l'ordre par défaut (sans garantie 
 langue).
 """
 import re
-from urllib.parse import urlparse
 
 import requests
 
 from src.var import DEFAULT_USER_AGENT, print_status
 from src.utils.config.config import get_setting
-from src.films.site import Media, Episode, Source, Site
-from src.nba.site import host_display_name
+from src.films.site import Media, Episode, Season, Source, Site
 
 DEFAULT_SITE_URL = "https://moviepluto.cc"
 TMDB_API = "https://api.themoviedb.org/3"
@@ -57,10 +55,9 @@ SERVERS = {
     "PASSION":    ("https://vidbolt.pro/",           "{base}movie/{id}",        "{base}tv/{id}/{season}/{episode}"),
 }
 
-# Ordre d'essai quand on demande explicitement « tous » les serveurs.
-DEFAULT_ORDER = ["BLUEBERRY", "APRICOT", "AVOCADO", "BANANA", "APPLE", "PLUM",
-                 "PINEBERRY", "CHERRY", "LIME", "CANTALOUPE", "TANGERINE",
-                 "PEAR", "GRAPE", "PASSION"]
+# Ordre d'essai quand on demande explicitement « tous » les serveurs : celui
+# de SERVERS.
+ALL_SERVERS = [(name, *spec) for name, spec in SERVERS.items()]
 
 # Serveur utilisé par défaut (aucun réglage) : un seul lecteur = pas d'étape de
 # choix. Vidnest (PLUM) renvoie un flux .m3u8/.mpd bien captable.
@@ -68,28 +65,26 @@ DEFAULT_SERVER = "vidnest"
 
 # /watch/<slug>/<id>                      -> film
 # /watch/<slug>/<id>/<season>/<episode>   -> série (saison/épisode optionnels)
-_WATCH_RE = re.compile(r"/watch/[^/]+/(\d+)(?:/(\d+))?(?:/(\d+))?", re.I)
+_WATCH_RE = re.compile(r"/watch/([^/]+)/(\d+)(?:/(\d+))?(?:/(\d+))?", re.I)
 
 
 def parse_watch_url(url):
-    """(type, id, saison, épisode) depuis une URL moviepluto, ex.
+    """(type, id, saison, épisode, slug) depuis une URL moviepluto, ex.
     'https://moviepluto.cc/watch/game-of-thrones/1399/1/1' ->
-    ('tv', 1399, 1, 1), ou None. Sans saison/épisode -> ('movie', id, None, None)."""
-    if not url:
-        return None
-    m = _WATCH_RE.search(url)
+    ('tv', 1399, 1, 1, 'game-of-thrones'), ou None. Sans saison/épisode ->
+    ('movie', id, None, None, slug)."""
+    m = _WATCH_RE.search(url or "")
     if not m:
         return None
-    tmdb = int(m.group(1))
-    season = int(m.group(2)) if m.group(2) else None
-    episode = int(m.group(3)) if m.group(3) else None
-    return ("tv" if season is not None else "movie"), tmdb, season, episode
+    slug, tmdb, season, episode = m.groups()
+    season = int(season) if season else None
+    episode = int(episode) if episode else None
+    return ("tv" if season is not None else "movie"), int(tmdb), season, episode, slug
 
 
 class MoviePluto:
     name = "moviepluto"
     label = "MoviePluto (VOSTFR)"
-    debrid = None
 
     def __init__(self, site=None):
         # Métadonnées (recherche, saisons, épisodes), dans l'ordre :
@@ -102,13 +97,6 @@ class MoviePluto:
         self.site = site
         self.base = (get_setting("films_moviepluto_site_url") or DEFAULT_SITE_URL).rstrip("/")
         self.tmdb_key = (get_setting("films_tmdb_key") or "").strip() or None
-
-    def metadata_source(self):
-        if self.tmdb_key:
-            return "tmdb"
-        if self.site is not None:
-            return "nakios"
-        return "none"
 
     # ----------------------------------------------------------------- TMDB
     def _tmdb(self, path, params=None):
@@ -136,68 +124,68 @@ class MoviePluto:
         # L'id renvoyé est un id TMDB, celui qu'attendent les lecteurs moviepluto.
         if self.tmdb_key:
             data = self._tmdb("/search/multi", {"query": query, "page": 1})
-            results = (data or {}).get("results") or []
-            out = []
-            limit = 40 if kind else 20
-            for item in results:
-                if not isinstance(item, dict) or item.get("media_type") not in ("movie", "tv"):
-                    continue
-                if not item.get("id"):
-                    continue
-                m = Media(item)
-                if kind and m.media_type != kind:
-                    continue
-                m.provider = self
-                out.append(m)
-                if len(out) >= limit:
-                    break
-            return out
-        if self.site is None:
+            res = Site._media_from_results((data or {}).get("results"))
+            res = [m for m in res if not kind or m.media_type == kind][:40 if kind else 20]
+        elif self.site is not None:
+            res = self.site.search(query, limit=40 if kind else 20)
+            if kind:
+                res = [m for m in res if m.media_type == kind]
+        else:
             print_status("Recherche moviepluto indisponible (ni clé TMDB, ni session nakios). "
                          "Colle une URL moviepluto, ou configure une clé TMDB (--tmdb-key).", "warning")
             return []
-        res = self.site.search(query, limit=40 if kind else 20)
-        if kind:
-            res = [m for m in res if m.media_type == kind]
         for m in res:
             m.provider = self
         return res
+
+    def media_from_url(self, url):
+        """Media pour une URL moviepluto .../watch/<slug>/<id>[/<saison>/<épisode>],
+        ou None. Le titre de secours vient du slug (remplacé par le vrai titre
+        dans details() si les métadonnées répondent)."""
+        parsed = parse_watch_url(url)
+        if not parsed:
+            return None
+        mtype, tmdb, season, episode, slug = parsed
+        title = re.sub(r"[-_]+", " ", slug).strip().title()
+        m = Media({"id": tmdb, "title": title} if title else {"id": tmdb}, media_type=mtype)
+        m.provider = self
+        m.pinned_season, m.pinned_episode = season, episode
+        return m
 
     def details(self, media):
         if self.tmdb_key:
             path = f"/tv/{media.id}" if media.is_series else f"/movie/{media.id}"
             data = self._tmdb(path)
             if data:
-                merged = Media(data, media_type=media.media_type)
-                if merged.title in ("?", None):
-                    merged.title = media.title
-                merged.year = merged.year or media.year
-                for attr in ("pinned_season", "pinned_episode"):
-                    if hasattr(media, attr):
-                        setattr(merged, attr, getattr(media, attr))
+                merged = Site._merge_details(media, data)
                 seasons = Site._seasons_from(data) if merged.is_series else []
-                return merged, seasons
-            # TMDB n'a pas répondu : on garde ce qu'on a (titre du slug…).
-            return media, []
-        if self.site is None:
-            return media, []
-        return self.site.details(media)
+            else:
+                merged, seasons = media, []  # TMDB muet : on garde le titre du slug…
+        elif self.site is not None:
+            merged, seasons = self.site.details(media)
+        else:
+            merged, seasons = media, []
+        # URL .../<id>/<saison>/<épisode> sans métadonnées : on expose quand
+        # même cette saison / cet épisode pour que le parcours normal le
+        # télécharge.
+        pinned = (getattr(media, "pinned_season", None), getattr(media, "pinned_episode", None))
+        merged.pinned_season, merged.pinned_episode = pinned
+        if merged.is_series and not seasons and all(pinned):
+            seasons = [Season(pinned[0])]
+        return merged, seasons
 
     def episodes(self, media, season):
         if self.tmdb_key:
             data = self._tmdb(f"/tv/{media.id}/season/{season}")
-            raw = (data or {}).get("episodes") or []
+            eps = Site._episodes_from((data or {}).get("episodes"), season)
+        elif self.site is not None:
+            eps = self.site.episodes(media, season)
+        else:
             eps = []
-            for e in raw:
-                num = e.get("episode_number")
-                if num is None:
-                    continue
-                eps.append(Episode(season, int(num), e.get("name") or e.get("title")))
-            eps.sort(key=lambda e: e.number)
-            return eps
-        if self.site is None:
-            return []
-        return self.site.episodes(media, season)
+        pinned_ep = getattr(media, "pinned_episode", None)
+        if not eps and pinned_ep and getattr(media, "pinned_season", None) == season:
+            eps = [Episode(season, pinned_ep)]
+        return eps
 
     # ---------------------------------------------------------------- lecteurs
     def _match_server(self, pref):
@@ -206,8 +194,7 @@ class MoviePluto:
         if not p:
             return None
         for name, (base, _, _) in SERVERS.items():
-            host = (urlparse(base).hostname or "").lower()
-            if p == name.lower() or p == host or (p in base.lower()) or (p in host):
+            if p == name.lower() or p in base.lower():
                 return name
         return None
 
@@ -215,7 +202,7 @@ class MoviePluto:
         pref = (get_setting("films_moviepluto_server") or "").strip()
         # « all » / « tous » : on essaie tous les serveurs dans l'ordre.
         if pref.lower() in ("all", "tous", "tout", "*"):
-            return [(name,) + SERVERS[name] for name in DEFAULT_ORDER if name in SERVERS]
+            return ALL_SERVERS
         # Aucun réglage : Vidnest par défaut (un seul lecteur, pas d'étape).
         if not pref:
             pref = DEFAULT_SERVER
@@ -223,22 +210,19 @@ class MoviePluto:
         if name:
             return [(name,) + SERVERS[name]]
         print_status(f"Serveur moviepluto « {pref} » inconnu : j'essaie tous les serveurs.", "warning")
-        return [(name,) + SERVERS[name] for name in DEFAULT_ORDER if name in SERVERS]
+        return ALL_SERVERS
 
     def sources(self, media, season=None, episode=None):
         """URLs des lecteurs moviepluto pour ce film / cet épisode, en Source
         étiquetées VOSTFR. `download_part` tentera ensuite l'extraction."""
+        if media.is_series:
+            if season is None or episode is None:
+                return []
+            season, episode = int(season), int(episode)
         out = []
         for name, base, movie_t, tv_t in self._servers_to_try():
-            try:
-                if media.is_series:
-                    if season is None or episode is None:
-                        continue
-                    url = tv_t.format(base=base, id=media.id, season=int(season), episode=int(episode))
-                else:
-                    url = movie_t.format(base=base, id=media.id)
-            except Exception:
-                continue
+            template = tv_t if media.is_series else movie_t
+            url = template.format(base=base, id=media.id, season=season, episode=episode)
             src = Source(url, label=name, lang="VOSTFR")
             src.host = f"{name} · {src.host}"
             src.provider = self

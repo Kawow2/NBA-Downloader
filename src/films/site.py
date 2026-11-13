@@ -322,22 +322,19 @@ class Site:
             results = data.get("results") or data.get("data") or []
         elif isinstance(data, list):
             results = data
+        return self._media_from_results(results)[:limit]
+
+    @staticmethod
+    def _media_from_results(results):
+        """Media des résultats d'une recherche « multi » (façon TMDB) : films
+        et séries seulement (pas les personnes), avec un id."""
         out = []
-        for item in results:
-            if not isinstance(item, dict):
+        for item in results or []:
+            if not isinstance(item, dict) or not item.get("id"):
                 continue
-            mt = item.get("media_type")
-            if mt == "person":
-                continue
-            if not item.get("id"):
-                continue
-            # La recherche « multi » peut contenir films et séries ; on garde
-            # les deux, on ignore le reste.
-            if mt not in ("movie", "tv", None):
+            if item.get("media_type") not in ("movie", "tv", None):
                 continue
             out.append(Media(item))
-            if len(out) >= limit:
-                break
         return out
 
     # ---------------------------------------------------------------- details
@@ -347,16 +344,21 @@ class Site:
         paths = _TV_DETAILS_PATHS if media.is_series else _MOVIE_DETAILS_PATHS
         data, _ = self._first_json(paths, id=media.id)
         if data:
-            merged = Media(data, media_type=media.media_type)
-            # Garde un titre déjà connu si les détails sont plus pauvres.
-            if merged.title in ("?", None):
-                merged.title = media.title
-            merged.year = merged.year or media.year
-            media = merged
+            media = self._merge_details(media, data)
         seasons = []
         if media.is_series:
             seasons = self._seasons_from(data or media.raw)
         return media, seasons
+
+    @staticmethod
+    def _merge_details(media, data):
+        """Media complété par les détails `data`, en gardant le titre / l'année
+        déjà connus si les détails sont plus pauvres."""
+        merged = Media(data, media_type=media.media_type)
+        if merged.title in ("?", None):
+            merged.title = media.title
+        merged.year = merged.year or media.year
+        return merged
 
     @staticmethod
     def _seasons_from(data):
@@ -372,6 +374,20 @@ class Site:
         seasons.sort(key=lambda s: s.number)
         return seasons
 
+    @staticmethod
+    def _episodes_from(raw, season_number):
+        """Episode triés depuis une liste JSON d'épisodes (façon TMDB)."""
+        episodes = []
+        for e in raw or []:
+            if not isinstance(e, dict):
+                continue
+            num = e.get("episode_number") or e.get("number")
+            if num is None:
+                continue
+            episodes.append(Episode(season_number, int(num), e.get("name") or e.get("title")))
+        episodes.sort(key=lambda e: e.number)
+        return episodes
+
     def episodes(self, series, season_number):
         """Liste des épisodes d'une saison."""
         data, _ = self._first_json(_SEASON_PATHS, id=series.id, season=season_number)
@@ -380,15 +396,7 @@ class Site:
             raw = data.get("episodes") or data.get("results") or []
         elif isinstance(data, list):
             raw = data
-        episodes = []
-        for e in raw:
-            if not isinstance(e, dict):
-                continue
-            num = e.get("episode_number") or e.get("number")
-            if num is None:
-                continue
-            episodes.append(Episode(season_number, int(num), e.get("name") or e.get("title")))
-        episodes.sort(key=lambda e: e.number)
+        episodes = self._episodes_from(raw, season_number)
         # Repli : si l'API ne détaille pas les épisodes mais que la saison
         # annonce un nombre, on génère 1..N (noms inconnus).
         if not episodes:

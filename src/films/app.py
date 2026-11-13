@@ -86,18 +86,25 @@ def yes(prompt, default=True):
     return ans in ("o", "oui", "y", "yes", "1")
 
 
+def _ensure_playwright(prompt, interactive=None):
+    """True si Playwright est disponible ; sinon, en interactif, propose de
+    l'installer (`prompt`) puis revérifie."""
+    from src.films import session as browser_session
+    if interactive is None:
+        interactive = sys.stdin.isatty()
+    if not browser_session.available() and interactive and yes(prompt, default=True):
+        browser_session.install(status=print_status)
+    return browser_session.available()
+
+
 def ask_language():
     """Demande VF ou VOSTFR/VOST. Renvoie 'vf' ou 'vost'."""
     print(f"\n{Colors.BOLD}{Colors.HEADER}🗣️  LANGUE{Colors.ENDC}")
     print(f"  {Colors.BOLD}1.{Colors.ENDC} VF {Colors.DIM}(français — nakios, zone-téléchargement){Colors.ENDC}")
     print(f"  {Colors.BOLD}2.{Colors.ENDC} VOSTFR / VOST {Colors.DIM}(VO sous-titrée — moviepluto, sous-titres FR + VO){Colors.ENDC}")
     while True:
-        pick = ask("Choix (1 = VF, 2 = VOSTFR, Entrée = VF) : ").strip().lower()
-        if pick in ("", "1"):
-            return "vf"
-        if pick == "2":
-            return "vost"
-        p = _parse_lang(pick)
+        pick = ask("Choix (1 = VF, 2 = VOSTFR, Entrée = VF) : ").strip()
+        p = _parse_lang(pick) if pick else "vf"
         if p in ("vf", "vost"):
             return p
         print_status("Choix invalide.", "error")
@@ -150,11 +157,8 @@ def ensure_session(site, interactive, use_browser=True, browser_visible=False, p
     # 2) Automatique : un vrai navigateur (Playwright) franchit Cloudflare.
     if use_browser:
         from src.films import session as browser_session
-        if not browser_session.available() and interactive:
-            if yes("Installer Playwright pour récupérer la session automatiquement "
-                   "(télécharge un navigateur, ~1 min, une seule fois) ?", default=True):
-                browser_session.install(status=print_status)
-        if browser_session.available():
+        if _ensure_playwright("Installer Playwright pour récupérer la session automatiquement "
+                              "(télécharge un navigateur, ~1 min, une seule fois) ?", interactive):
             bs = browser_session.BrowserSession(site.base, status=print_status, profile_dir=profile_dir)
             if bs.open(headless=not browser_visible):
                 # Capturer les en-têtes propres à l'appli (x-profile-id…) vus
@@ -269,9 +273,11 @@ def build_providers(site, nakios_ready, lang_pref=None):
       - 'vf' / None : nakios (si session OK) + zone-telechargement (si une clé
         AllDebrid est configurée) — comportement historique ;
       - 'all'   : les deux ensemble."""
+    from src.films.moviepluto import MoviePluto
+    # Métadonnées moviepluto via nakios seulement si la session répond.
+    meta_site = site if nakios_ready else None
     if lang_pref == "vost":
-        from src.films.moviepluto import MoviePluto
-        return [MoviePluto(site)]
+        return [MoviePluto(meta_site)]
     providers = []
     if nakios_ready:
         providers.append(NakiosProvider(site))
@@ -280,8 +286,7 @@ def build_providers(site, nakios_ready, lang_pref=None):
         from src.films.alldebrid import AllDebrid
         providers.append(Zone(debrid=AllDebrid()))
     if lang_pref == "all":
-        from src.films.moviepluto import MoviePluto
-        providers.append(MoviePluto(site))
+        providers.append(MoviePluto(meta_site))
     return providers
 
 
@@ -355,23 +360,10 @@ def media_from_url(url, providers):
     nakios .../series|film/<id>, ou zone .../?p=film&id=…) et renvoie un média
     rattaché au bon fournisseur."""
     from src.films.site import Media
-    # moviepluto : /watch/<slug>/<id>[/<saison>/<épisode>]
-    mp = next((p for p in providers if getattr(p, "name", None) == "moviepluto"), None)
-    if mp and ("moviepluto" in url.lower() or "/watch/" in url.lower()):
-        from src.films.moviepluto import parse_watch_url
-        parsed_mp = parse_watch_url(url)
-        if parsed_mp:
-            mtype, tmdb, season, episode = parsed_mp
-            # Titre de secours depuis le slug de l'URL (remplacé par le vrai
-            # titre TMDB dans details() si la session répond).
-            slug_m = re.search(r"/watch/([^/]+)/\d+", url)
-            title = re.sub(r"[-_]+", " ", slug_m.group(1)).strip().title() if slug_m else None
-            m = Media({"id": tmdb, "title": title} if title else {"id": tmdb}, media_type=mtype)
-            m.provider = mp
-            if season is not None:
-                m.pinned_season = season
-            if episode is not None:
-                m.pinned_episode = episode
+    # Fournisseurs qui reconnaissent leurs propres URLs (moviepluto…).
+    for p in providers:
+        m = p.media_from_url(url) if hasattr(p, "media_from_url") else None
+        if m is not None:
             return m
     parsed = parse_media_url(url)
     nak = next((p for p in providers if p.name == "nakios"), None)
@@ -640,11 +632,10 @@ def _download_via_debrid(provider, src, out_path):
     return None
 
 
-def _maybe_subtitles(provider, src, out_path, media, season, episode):
-    """Récupère les sous-titres FR + VO en sidecar pour une source VOST
-    (moviepluto, ou toute source étiquetée VOSTFR/VOST). Best-effort."""
-    is_vost = getattr(provider, "name", None) == "moviepluto" or _lang_group(getattr(src, "lang", None)) == "vost"
-    if not is_vost:
+def _maybe_subtitles(src, out_path, media, season, episode):
+    """Récupère les sous-titres FR + VO en sidecar pour une source étiquetée
+    VOSTFR/VOST (dont toutes celles de moviepluto). Best-effort."""
+    if _lang_group(getattr(src, "lang", None)) != "vost":
         return
     try:
         subs.download_for(src, out_path, media=media, season=season, episode=episode)
@@ -652,54 +643,58 @@ def _maybe_subtitles(provider, src, out_path, media, season, episode):
         print_status(f"Sous-titres : échec ({str(e)[:100]})", "warning")
 
 
-def _download_resolved(provider, media, out_path, ordered, season, episode):
-    """Lecteurs à résoudre (moviepluto) : un navigateur ouvre chaque lecteur,
-    capte le flux .m3u8 (+ sous-titres), puis on télécharge le flux. Un seul
-    navigateur sert pour tous les lecteurs essayés."""
+# Navigateur de résolution des lecteurs moviepluto : démarré au premier
+# besoin, puis réutilisé pour tous les lecteurs et épisodes de la session ;
+# fermé à la fin de main(). False = indisponible (on ne réessaie pas).
+_resolver = None
+
+
+def _get_resolver():
+    """Le résolveur partagé (démarré si besoin), ou None si indisponible."""
+    global _resolver
+    if _resolver is not None:
+        return _resolver or None
+    _resolver = False
     from src.films import moviepluto_resolve as mpr
-    if not mpr.available():
+    from src.films import session as browser_session
+    if not browser_session.available():
         print_status("Playwright est requis pour extraire les lecteurs moviepluto.", "error")
-        from src.films import session as browser_session
-        if sys.stdin.isatty() and yes("L'installer maintenant (~1 min, une seule fois) ?", default=True):
-            browser_session.install(status=print_status)
-        if not mpr.available():
-            print_status(f"À installer à la main : {mpr.install_hint()}", "info")
-            return False
+        if not _ensure_playwright("L'installer maintenant (~1 min, une seule fois) ?"):
+            print_status(f"À installer à la main : {browser_session.install_hint()}", "info")
+            return None
     resolver = mpr.MoviePlutoResolver(status=print_status, headless=not _browser_visible)
     if not resolver.start():
-        return False
-    try:
-        for i, src in enumerate(ordered, 1):
-            print_separator(title=f"LECTEUR {i}/{len(ordered)} · {src.describe()}")
-            print_status("Ouverture du lecteur dans le navigateur (capture du flux)…", "loading")
-            info = resolver.resolve(src.url, getattr(src, "page_referer", None))
-            if not info or not info.get("stream"):
-                print_status("Aucun flux capté sur ce lecteur, suivant…", "warning")
-                continue
-            if info.get("subtitles"):
-                src.subtitles = info["subtitles"]
-            stream, ref = info["stream"], info.get("referer") or getattr(src, "page_referer", None)
-            # Pour les sous-titres : viser le flux capté (.mpd/.m3u8 embarque
-            # souvent les pistes texte) plutôt que la page du lecteur.
-            src.resolved_stream = stream
-            src.resolved_referer = ref
-            print_status(f"Flux capté : {stream[:90]}…", "success")
-            if download_part(stream, out_path, page_url=ref):
-                # Beaucoup de flux moviepluto sont en HEVC taggé hev1 : on
-                # retague en hvc1 (sans ré-encodage) pour que Plex lise image
-                # ET son correctement.
-                try:
-                    ensure_hvc1(out_path)
-                except Exception:
-                    pass
-                _maybe_subtitles(provider, src, out_path, media, season, episode)
-                print_status(f"Enregistré : {out_path}", "success")
-                return True
-            print_status(f"Téléchargement du flux échoué (« {src.describe()} »), lecteur suivant…", "warning")
-        print_status("Aucun lecteur exploitable (flux non capté ou non téléchargeable).", "error")
-        return False
-    finally:
         resolver.close()
+        return None
+    _resolver = resolver
+    return _resolver
+
+
+def _close_resolver():
+    global _resolver
+    if _resolver:
+        _resolver.close()
+    _resolver = None
+
+
+def _resolve_source(src):
+    """Lecteur moviepluto (page JS) : l'ouvre dans le navigateur et capte le
+    flux .m3u8 (+ sous-titres). Renvoie (flux, referer) ou None."""
+    resolver = _get_resolver()
+    if resolver is None:
+        return None
+    print_status("Ouverture du lecteur dans le navigateur (capture du flux)…", "loading")
+    info = resolver.resolve(src.url, getattr(src, "page_referer", None))
+    if not info or not info.get("stream"):
+        print_status("Aucun flux capté sur ce lecteur.", "warning")
+        return None
+    if info.get("subtitles"):
+        src.subtitles = info["subtitles"]
+    # Pour les sous-titres : viser le flux capté (.mpd/.m3u8 embarque souvent
+    # les pistes texte) plutôt que la page du lecteur.
+    src.resolved_stream, src.resolved_referer = info["stream"], info["referer"]
+    print_status(f"Flux capté : {info['stream'][:90]}…", "success")
+    return info["stream"], info["referer"]
 
 
 def download_media(provider, media, out_path, season=None, episode=None, prefer=None, sources=None):
@@ -715,10 +710,6 @@ def download_media(provider, media, out_path, season=None, episode=None, prefer=
         _no_sources_help(provider, media, season, episode)
         return False
     ordered = _ordered_sources(sources, prefer)
-    # Lecteurs moviepluto : pages JS qu'il faut résoudre dans un navigateur
-    # pour en capter le flux .m3u8 (+ sous-titres). Chemin dédié.
-    if any(getattr(s, "needs_resolve", False) for s in ordered):
-        return _download_resolved(provider, media, out_path, ordered, season, episode)
     for i, src in enumerate(ordered, 1):
         print_separator(title=f"LECTEUR {i}/{len(ordered)} · {src.describe()}")
         if getattr(src, "needs_debrid", False):
@@ -726,10 +717,22 @@ def download_media(provider, media, out_path, season=None, episode=None, prefer=
             if final:
                 print_status(f"Enregistré : {final}", "success")
                 return True
-        elif download_part(src.url, out_path, page_url=provider.base + "/"):
-            _maybe_subtitles(provider, src, out_path, media, season, episode)
-            print_status(f"Enregistré : {out_path}", "success")
-            return True
+        else:
+            # Lecteurs moviepluto : pages JS à résoudre dans un navigateur.
+            target = _resolve_source(src) if getattr(src, "needs_resolve", False) \
+                else (src.url, provider.base + "/")
+            if target and download_part(target[0], out_path, page_url=target[1]):
+                if getattr(src, "needs_resolve", False):
+                    # Beaucoup de flux moviepluto sont en HEVC taggé hev1 : on
+                    # retague en hvc1 (sans ré-encodage) pour que Plex lise
+                    # image ET son correctement.
+                    try:
+                        ensure_hvc1(out_path)
+                    except Exception:
+                        pass
+                _maybe_subtitles(src, out_path, media, season, episode)
+                print_status(f"Enregistré : {out_path}", "success")
+                return True
         print_status(f"Échec sur « {src.describe()} », lecteur suivant…", "warning")
     print_status("Tous les lecteurs ont échoué.", "error")
     return False
@@ -757,38 +760,11 @@ def process_movie(provider, media, dest):
     return ok
 
 
-def _download_single_episode(provider, media, dest, sn, en):
-    """Télécharge un seul épisode (saison sn, épisode en) sans passer par la
-    liste des saisons/épisodes — utile pour une URL moviepluto qui pointe
-    directement un épisode, sans métadonnées TMDB."""
-    folder, stem = plex.series_target(dest, media.title, sn, en, media.year, None)
-    out_path = os.path.join(folder, stem + ".mp4")
-    existing = _already_downloaded(out_path)
-    if existing:
-        print_status(f"Déjà présent : {existing}", "success")
-        return True
-    print_separator(title=f"S{sn:02d}E{en:02d}")
-    ep_sources = provider.sources(media, season=sn, episode=en)
-    if not ep_sources:
-        _no_sources_help(provider, media, sn, en)
-        clean_temp_files(folder, stem, keep_own=True)
-        return False
-    prefer = choose_source(ep_sources, sys.stdin.isatty())
-    ok = download_media(provider, media, out_path, season=sn, episode=en, prefer=prefer, sources=ep_sources)
-    clean_temp_files(folder, stem, keep_own=True)
-    return ok
-
-
 def process_series(provider, media, dest, cli_season=None, cli_episodes=None):
     media, seasons = provider.details(media)
     print(f"\n{Colors.BOLD}{Colors.OKGREEN}📺 {media.title}{Colors.ENDC}"
           + (f"  {Colors.DIM}({media.year}){Colors.ENDC}" if media.year else ""))
     if not seasons:
-        # URL moviepluto .../<id>/<saison>/<épisode> : on peut télécharger cet
-        # épisode précis sans la liste des saisons (métadonnées indisponibles).
-        if getattr(media, "pinned_season", None) and getattr(media, "pinned_episode", None):
-            return _download_single_episode(provider, media, dest,
-                                            int(media.pinned_season), int(media.pinned_episode))
         print_status("Impossible de lister les saisons. Ajoute une clé TMDB (--tmdb-key) pour "
                      "parcourir saisons/épisodes, ou colle une URL moviepluto avec la saison et "
                      "l'épisode (.../watch/<slug>/<id>/<saison>/<épisode>).", "error")
@@ -896,11 +872,8 @@ def export_session(browser_visible, profile_dir=None):
     et renvoie un jeton base64 contenant tout ce qu'il faut (cookie, UA, base
     d'API, profil, en-têtes), ou None."""
     from src.films import session as browser_session
-    if not browser_session.available():
-        if sys.stdin.isatty() and yes("Playwright est requis pour capturer la session. L'installer "
-                                       "maintenant (~1 min) ?", default=True):
-            browser_session.install(status=print_status)
-    if not browser_session.available():
+    if not _ensure_playwright("Playwright est requis pour capturer la session. L'installer "
+                              "maintenant (~1 min) ?"):
         print_status("Playwright indisponible : " + browser_session.install_hint(), "error")
         return None
     site = Site()
@@ -1209,6 +1182,7 @@ def main():
                 break
             print()
     finally:
+        _close_resolver()
         if getattr(site, "browser", None) is not None:
             site.browser.close()
             site.browser = None

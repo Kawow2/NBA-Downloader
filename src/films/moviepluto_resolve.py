@@ -11,10 +11,11 @@ passent sur le réseau**. On télécharge ensuite ce flux avec le pipeline habit
 Réutilise Playwright (déjà requis pour la session nakios). Variable d'env
 facultative FILMS_CHROMIUM_PATH = binaire Chrome/Chromium à utiliser.
 """
-import os
 import re
 import time
-from urllib.parse import urlparse
+
+from src.var import DEFAULT_USER_AGENT
+from src.films.session import available, install_hint, chromium_launch_options, launch_chromium
 
 DEFAULT_REFERER = "https://moviepluto.cc/"
 
@@ -25,24 +26,12 @@ _SUB_RE = re.compile(r"\.(vtt|srt)(\?|$)", re.I)
 # Sous-titres servis sans extension .vtt/.srt (proxy, API) : repérés par un
 # indice dans l'URL ou par le type MIME de la réponse.
 _SUB_HINT = re.compile(r"(subtitle|/subs?[/.]|caption|[?&](lang|sub|srt|vtt)=)", re.I)
-_SUB_CT = ("text/vtt", "application/x-subrip", "text/srt", "application/ttml", "text/vtt;")
+_SUB_CT = ("text/vtt", "application/x-subrip", "text/srt", "application/ttml")
 
 # Bruit à ignorer (pubs, trackers, miniatures…).
 _NOISE = ("google", "doubleclick", "facebook", "analytics", "sentry", "cloudflareinsights",
           "adservice", "/ads", "popads", "histats", "yandex", "/thumb", "sprite", "preview",
           "storage.googleapis.com")
-
-
-def available():
-    try:
-        import playwright  # noqa: F401
-        return True
-    except Exception:
-        return False
-
-
-def install_hint():
-    return "pip install playwright && playwright install chromium"
 
 
 def _is_noise(url):
@@ -82,25 +71,14 @@ class MoviePlutoResolver:
             return False
         try:
             self._pw = sync_playwright().start()
-            args = ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--mute-audio"]
-            launch = {"headless": self.headless, "args": args}
-            exe = os.environ.get("FILMS_CHROMIUM_PATH")
-            attempts = [dict(launch, executable_path=exe)] if exe else \
-                       [dict(launch, channel="chrome"), dict(launch)]
-            last = None
-            for kw in attempts:
-                try:
-                    self._browser = self._pw.chromium.launch(**kw)
-                    break
-                except Exception as e:
-                    last = e
+            self._browser, last = launch_chromium(
+                self._pw, chromium_launch_options(self.headless, ["--mute-audio"]))
             if not self._browser:
                 self._say(f"Lancement du navigateur impossible : {str(last)[:120]}", "error")
                 return False
             self._context = self._browser.new_context(
                 locale="fr-FR", viewport={"width": 1280, "height": 800},
-                user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"))
+                user_agent=DEFAULT_USER_AGENT)
             return True
         except Exception as e:
             self._say(f"Navigateur : {str(e)[:150]}", "error")
@@ -175,12 +153,7 @@ class MoviePlutoResolver:
         if found:
             stream_url, headers = found
             ref = headers.get("referer") or headers.get("Referer") or referer
-            seen, sub_list = set(), []
-            for u in subs:
-                if u in seen:
-                    continue
-                seen.add(u)
-                sub_list.append({"url": u, "lang": _guess_lang(u), "label": u})
+            sub_list = [{"url": u, "lang": _guess_lang(u), "label": u} for u in subs]
             result = {"stream": stream_url, "referer": ref, "subtitles": sub_list}
         try:
             page.close()
