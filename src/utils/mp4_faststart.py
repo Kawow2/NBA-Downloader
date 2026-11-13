@@ -86,6 +86,24 @@ def _lossless_audio_fix(path, sound):
     return False
 
 
+def _remux(path, suffix, codec_args, label, duration, sound):
+    """Stream copy of `path` with `codec_args`, index at the start. The file
+    is replaced only if the copy is faststart and its sound unchanged.
+    Returns True if the file was rewritten."""
+    tmp = path + suffix
+    ok = run_ffmpeg(["-i", path, *codec_args, "-movflags", "+faststart", "-f", "mp4", tmp],
+                    label, duration)
+    if (ok and os.path.exists(tmp) and os.path.getsize(tmp) > 0 and is_faststart(tmp)
+            and _audio_signature(tmp) == sound):
+        os.replace(tmp, path)
+        return True
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+    return False
+
+
 def ensure_faststart(path, quiet=False):
     """Move the index to the start of an .mp4 if it isn't there yet.
     Returns True if the file was rewritten."""
@@ -104,7 +122,6 @@ def ensure_faststart(path, quiet=False):
             return True
     if is_faststart(path) is not False:
         return False
-    tmp = path + ".faststart.part"
     if not quiet:
         print_status(f"Faststart (index en début de fichier, sans ré-encodage) : {os.path.basename(path)}", "loading")
     duration = media_duration(path)
@@ -121,16 +138,8 @@ def ensure_faststart(path, quiet=False):
     for codec_args, label in attempts:
         if "aac" in codec_args and sound and _lossless_audio_fix(path, sound):
             return True
-        ok = run_ffmpeg(["-i", path, *codec_args, "-movflags", "+faststart", "-f", "mp4", tmp],
-                        label, duration)
-        if (ok and os.path.exists(tmp) and os.path.getsize(tmp) > 0 and is_faststart(tmp)
-                and _audio_signature(tmp) == sound):
-            os.replace(tmp, path)
+        if _remux(path, ".faststart.part", codec_args, label, duration, sound):
             return True
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
     print_status(f"Impossible d'optimiser {os.path.basename(path)} (fichier laissé tel quel)", "warning")
     return False
 
@@ -147,7 +156,7 @@ def _video_codec_tag(path):
     return (out[0] if out else None), (out[1] if len(out) > 1 else None)
 
 
-def ensure_hvc1(path, quiet=False):
+def ensure_hvc1(path):
     """HEVC taggé `hev1` → `hvc1`, sans ré-encodage : beaucoup de clients Plex
     (navigateur, Apple, TV) gèrent mal `hev1` (image ou SON absents). Le son et
     l'image sont recopiés tels quels. True si le fichier a été réécrit."""
@@ -158,21 +167,10 @@ def ensure_hvc1(path, quiet=False):
     codec, tag = _video_codec_tag(path)
     if codec != "hevc" or (tag or "").lower() == "hvc1":
         return False  # pas du HEVC, ou déjà hvc1
-    tmp = path + ".hvc1.part"
-    if not quiet:
-        print_status(f"HEVC {tag or '?'}→hvc1 (compatibilité Plex, sans ré-encodage) : "
-                     f"{os.path.basename(path)}", "loading")
-    sound = _audio_signature(path)
-    ok = run_ffmpeg(["-i", path, "-map", "0", "-c", "copy", "-tag:v", "hvc1", "-ignore_unknown",
-                     "-movflags", "+faststart", "-f", "mp4", tmp], "🔧 hev1→hvc1", media_duration(path))
-    if ok and os.path.exists(tmp) and os.path.getsize(tmp) > 0 and _audio_signature(tmp) == sound:
-        os.replace(tmp, path)
-        return True
-    try:
-        os.remove(tmp)
-    except OSError:
-        pass
-    return False
+    print_status(f"HEVC {tag or '?'}→hvc1 (compatibilité Plex, sans ré-encodage) : "
+                 f"{os.path.basename(path)}", "loading")
+    return _remux(path, ".hvc1.part", ["-map", "0", "-c", "copy", "-tag:v", "hvc1", "-ignore_unknown"],
+                  "🔧 hev1→hvc1", media_duration(path), _audio_signature(path))
 
 
 def fix_folder(folder):
@@ -186,9 +184,11 @@ def fix_folder(folder):
         for name in sorted(files):
             if name.lower().endswith((".mp4", ".m4v")):
                 checked += 1
-                changed = ensure_faststart(os.path.join(root, name))
-                changed = ensure_hvc1(os.path.join(root, name)) or changed
-                if changed:
+                path = os.path.join(root, name)
+                # hvc1 first: its rewrite is already faststart, so
+                # ensure_faststart then has nothing left to move.
+                changed = ensure_hvc1(path)
+                if ensure_faststart(path) or changed:
                     fixed += 1
     print_status(f"{folder} : {checked} fichier(s) .mp4 vérifié(s), {fixed} optimisé(s) ou réparé(s).", "success")
     return fixed

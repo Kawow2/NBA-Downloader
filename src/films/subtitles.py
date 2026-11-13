@@ -24,6 +24,8 @@ sub_fps / fps_vidéo (le « décalage » de Plex ne corrige qu'un offset fixe)."
 import os
 import re
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urljoin
 
 import requests
 
@@ -70,36 +72,24 @@ def subtitles_enabled():
     return subtitles_setting() not in ("off", "non", "no", "0", "none", "aucun", "")
 
 
+# Alias acceptés dans le réglage, en plus des codes ISO.
+_SETTING_ALIASES = {"all": "fr,vo", "tout": "fr,vo", "tous": "fr,vo", "vo,fr": "fr,vo",
+                    "fra": "fr", "french": "fr"}
+
+
 def wanted_langs(media=None):
     """Liste de codes ISO à récupérer, selon le réglage et la VO du média.
-    'fr,vo' -> ['fr', <langue originale>] ; 'fr' -> ['fr'] ; 'all' -> fr + vo."""
-    setting = subtitles_setting()
-    orig = None
-    if media is not None:
-        orig = ((getattr(media, "raw", {}) or {}).get("original_language") or "").lower() or None
-    vo = orig or "en"
-    langs = []
-    if setting in ("off", "non", "no", "0", "none", "aucun", ""):
+    'fr,vo' -> ['fr', <langue originale>] ; 'fr' -> ['fr'] ; 'all' -> fr + vo ;
+    sinon une liste de codes séparés par virgule ('vo' = langue originale)."""
+    if not subtitles_enabled():
         return []
-    if setting in ("vo", "vost"):
-        langs = [vo]
-    elif setting in ("fr", "fra", "french"):
-        langs = ["fr"]
-    elif setting in ("all", "tout", "tous", "fr,vo", "vo,fr", "fr+vo"):
-        langs = ["fr", vo]
-    else:
-        # Liste explicite de codes séparés par virgule, "vo" = langue originale.
-        for tok in re.split(r"[\s,;+]+", setting):
-            if not tok:
-                continue
-            langs.append(vo if tok in ("vo", "vost") else tok)
-    # Dédoublonne en gardant l'ordre.
-    seen, out = set(), []
-    for c in langs:
-        if c and c not in seen:
-            seen.add(c)
-            out.append(c)
-    return out
+    setting = subtitles_setting()
+    setting = _SETTING_ALIASES.get(setting, setting)
+    raw = (getattr(media, "raw", None) or {}) if media is not None else {}
+    vo = (raw.get("original_language") or "").lower() or "en"
+    langs = [vo if tok in ("vo", "vost") else tok
+             for tok in re.split(r"[\s,;+]+", setting) if tok]
+    return list(dict.fromkeys(langs))  # dédoublonne en gardant l'ordre
 
 
 # --------------------------------------------------------------- conversion
@@ -149,25 +139,21 @@ def vtt_to_srt(text):
     return "\n".join(out)
 
 
-def _looks_vtt(text):
-    return text.lstrip().upper().startswith("WEBVTT")
-
-
-def _write_srt(text, stem, code):
-    """Écrit `text` (SRT ou VTT) en <stem>.<code>.srt (converti si besoin)."""
-    if not text or not text.strip():
-        return None
-    if _looks_vtt(text):
-        text = vtt_to_srt(text)
-    if not text.strip():
-        return None
+def _write_srt(srt, stem, code):
+    """Écrit le SRT `srt` en <stem>.<code>.srt. Renvoie le chemin, ou None."""
     path = f"{stem}.{code}.srt"
     try:
         with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
+            f.write(srt)
     except OSError:
         return None
     return path
+
+
+# Une seule session HTTP (connexions réutilisées : une playlist HLS de
+# sous-titres compte des centaines de segments).
+_http = requests.Session()
+_http.mount("https://", requests.adapters.HTTPAdapter(pool_maxsize=16))
 
 
 def _fetch(url, referer=None, timeout=30):
@@ -175,7 +161,7 @@ def _fetch(url, referer=None, timeout=30):
     if referer:
         headers["Referer"] = referer
     try:
-        r = requests.get(url, headers=headers, timeout=timeout)
+        r = _http.get(url, headers=headers, timeout=timeout)
         r.raise_for_status()
         return r.text
     except (requests.RequestException, OSError):
@@ -208,7 +194,7 @@ def _ytdlp_subtitles(embed_url, referer):
             info = ydl.extract_info(embed_url, download=False)
     except Exception:
         return {}
-    return (info or {}).get("subtitles") or {} if isinstance(info, dict) else {}
+    return (info.get("subtitles") or {}) if isinstance(info, dict) else {}
 
 
 def _pick_track(subs, code):
@@ -297,15 +283,12 @@ def _maybe_rescale(srt_path, video_path):
 # --------------------------------------------- validation / formats des pistes
 def _hls_subs_to_srt(playlist, playlist_url, referer):
     """Playlist HLS de sous-titres (#EXTM3U) → SRT : récupère les segments .vtt
-    référencés et les concatène."""
-    from urllib.parse import urljoin
+    référencés (en parallèle, ordre conservé) et les concatène."""
     segs = [ln.strip() for ln in playlist.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
-    parts = []
-    for seg in segs[:4000]:
-        seg_url = seg if seg.startswith("http") else urljoin(playlist_url, seg)
-        t = _fetch(seg_url, referer=referer)
-        if t and "-->" in t:
-            parts.append(t)
+    seg_urls = [seg if seg.startswith("http") else urljoin(playlist_url, seg) for seg in segs[:4000]]
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        texts = pool.map(lambda u: _fetch(u, referer=referer), seg_urls)
+        parts = [t for t in texts if t and "-->" in t]
     if not parts:
         return None
     srt = vtt_to_srt("\n\n".join(parts))
@@ -336,6 +319,19 @@ def _valid_srt_file(path):
         return False
 
 
+def _first_valid(urls, stem, code, referer):
+    """Télécharge les `urls` dans l'ordre jusqu'à obtenir un sous-titre valide,
+    écrit en <stem>.<code>.srt. Renvoie le chemin, ou None."""
+    for url in urls:
+        raw = _fetch(url, referer=referer)
+        srt = _subtitle_to_srt(raw, url, referer) if raw else None
+        if srt:
+            path = _write_srt(srt, stem, code)
+            if path:
+                return path
+    return None
+
+
 # -------------------------------------------------------------------- public
 def download_for(source, video_out_path, media=None, season=None, episode=None):
     """Télécharge les sous-titres voulus (FR + VO par défaut) en sidecars à côté
@@ -363,33 +359,24 @@ def download_for(source, video_out_path, media=None, season=None, episode=None):
             except OSError:
                 pass
 
-        # Candidats (dans l'ordre) : pistes portées par la Source, puis yt-dlp.
+        # Candidats (dans l'ordre) : pistes portées par la Source, puis — si
+        # aucune ne donne un SRT valide — yt-dlp (interrogé une seule fois).
         candidates = [sub["url"] for sub in explicit
                       if isinstance(sub, dict) and sub.get("url")
                       and _matches(code, sub.get("lang"), sub.get("label"))]
-        if ytdlp_subs is None:
-            probe_url = getattr(source, "resolved_stream", None) or getattr(source, "url", None)
-            probe_ref = getattr(source, "resolved_referer", None) or referer
-            try:
+        path = _first_valid(candidates, stem, code, referer)
+        if not path:
+            if ytdlp_subs is None:
+                probe_url = getattr(source, "resolved_stream", None) or getattr(source, "url", None)
+                probe_ref = getattr(source, "resolved_referer", None) or referer
                 ytdlp_subs = _ytdlp_subtitles(probe_url, probe_ref)
-            except Exception:
-                ytdlp_subs = {}
-        yurl = _pick_track(ytdlp_subs, code)
-        if yurl and yurl not in candidates:
-            candidates.append(yurl)
-
-        # On essaie chaque candidat jusqu'à obtenir un SRT valide.
-        for url in candidates:
-            raw = _fetch(url, referer=referer)
-            srt = _subtitle_to_srt(raw, url, referer) if raw else None
-            if not srt:
-                continue
-            path = _write_srt(srt, stem, code)
-            if path:
-                _maybe_rescale(path, video_out_path)
-                written.append(path)
-                print_status(f"Sous-titres {code.upper()} : {os.path.basename(path)}", "success")
-                break
+            yurl = _pick_track(ytdlp_subs, code)
+            if yurl and yurl not in candidates:
+                path = _first_valid([yurl], stem, code, referer)
+        if path:
+            _maybe_rescale(path, video_out_path)
+            written.append(path)
+            print_status(f"Sous-titres {code.upper()} : {os.path.basename(path)}", "success")
 
     if not written:
         print_status("Sous-titres introuvables pour ce lecteur (vidéo gardée).", "info")
